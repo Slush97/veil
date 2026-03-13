@@ -1,0 +1,72 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/veil-core",
+    "crates/veil-crypto",
+    "crates/veil-net",
+    "crates/veil-relay",
+    "crates/veil-store",
+    "veil-client",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Internal crates
+veil-core = { path = "crates/veil-core" }
+veil-crypto = { path = "crates/veil-crypto" }
+veil-net = { path = "crates/veil-net" }
+veil-relay = { path = "crates/veil-relay" }
+veil-store = { path = "crates/veil-store" }
+
+# Crypto
+ed25519-dalek = { version = "2", features = ["rand_core", "serde", "zeroize"] }
+x25519-dalek = { version = "2", features = ["serde", "static_secrets", "zeroize"] }
+chacha20poly1305 = "0.10"
+blake3 = "1"
+rand = "0.8"
+zeroize = { version = "1", features = ["derive"] }
+
+# Networking
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1", features = ["full"] }
+
+# Storage
+redb = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+
+# Erasure coding
+reed-solomon-erasure = "6"
+
+# UI
+iced = { version = "0.13", features = ["tokio", "image"] }
+
+# LRU cache
+lru = "0.12"
+
+# Identity persistence
+argon2 = "0.5"
+
+# mDNS discovery
+mdns-sd = "0.11"
+
+# Hex encoding
+hex = "0.4"
+
+# Base64 encoding
+base64 = "0.22"
+
+# Utilities
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+futures = "0.3"

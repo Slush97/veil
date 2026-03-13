@@ -1,0 +1,100 @@
+use bincode::Options;
+use serde::{Deserialize, Serialize};
+
+/// Maximum relay message size (4 MiB — smaller than peer protocol since relay
+/// messages are envelopes, not raw blobs).
+pub const MAX_RELAY_MESSAGE_SIZE: u64 = 4 * 1024 * 1024;
+
+/// Messages exchanged between clients and the relay.
+///
+/// The relay protocol is intentionally separate from the peer wire protocol.
+/// This keeps the relay binary free of crypto dependencies and ensures it
+/// cannot interpret message contents even in theory.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum RelayMessage {
+    /// Client → Relay: authenticate and subscribe to routing tags.
+    /// The `peer_id_bytes` is the client's Ed25519 public key (32 bytes) —
+    /// the relay stores it opaquely for mailbox addressing but cannot verify it.
+    Hello {
+        peer_id_bytes: [u8; 32],
+        routing_tags: Vec<[u8; 32]>,
+        version: u32,
+    },
+
+    /// Client → Relay: subscribe to additional routing tags.
+    /// Includes an Ed25519 signature over the concatenated routing tags
+    /// to prove the subscriber controls the peer_id from Hello.
+    Subscribe {
+        routing_tags: Vec<[u8; 32]>,
+        /// Ed25519 signature over the concatenated routing tag bytes.
+        signature: Vec<u8>,
+    },
+
+    /// Client → Relay: unsubscribe from routing tags.
+    Unsubscribe {
+        routing_tags: Vec<[u8; 32]>,
+    },
+
+    /// Bidirectional: forward an opaque payload to all subscribers of a routing tag.
+    /// Client → Relay: "send this to everyone on this tag."
+    /// Relay → Client: "someone sent this on a tag you subscribe to."
+    Forward {
+        routing_tag: [u8; 32],
+        payload: Vec<u8>,
+    },
+
+    /// Client → Relay: request queued messages (mailbox drain).
+    DrainMailbox,
+
+    /// Relay → Client: mailbox contents.
+    MailboxBatch {
+        messages: Vec<ForwardEnvelope>,
+        remaining: u64,
+    },
+
+    /// Relay → Client: status/error feedback.
+    Status {
+        code: StatusCode,
+        message: String,
+    },
+
+    Ping(u64),
+    Pong(u64),
+}
+
+/// A queued message in the mailbox.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ForwardEnvelope {
+    pub routing_tag: [u8; 32],
+    pub payload: Vec<u8>,
+    /// Unix timestamp when the relay received this message.
+    pub received_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StatusCode {
+    Ok,
+    TagLimitExceeded,
+    MailboxFull,
+    RateLimited,
+    BadVersion,
+}
+
+/// Current relay protocol version.
+pub const RELAY_PROTOCOL_VERSION: u32 = 1;
+
+impl RelayMessage {
+    fn bincode_options() -> impl bincode::Options {
+        bincode::options()
+            .with_limit(MAX_RELAY_MESSAGE_SIZE)
+            .allow_trailing_bytes()
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, bincode::Error> {
+        Self::bincode_options().serialize(self)
+    }
+
+    pub fn decode(data: &[u8]) -> Result<Self, bincode::Error> {
+        Self::bincode_options().deserialize(data)
+    }
+}

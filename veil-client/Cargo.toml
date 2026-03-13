@@ -1,0 +1,20 @@
+[package]
+name = "veil-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+veil-core.workspace = true
+veil-crypto.workspace = true
+veil-net.workspace = true
+veil-store.workspace = true
+iced.workspace = true
+chrono.workspace = true
+bincode.workspace = true
+blake3.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+zeroize.workspace = true
