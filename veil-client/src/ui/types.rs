@@ -147,6 +147,14 @@ impl ChatMessage {
     }
 }
 
+/// Result of a contact search (username lookup).
+#[derive(Clone, Debug)]
+pub(crate) enum ContactSearchResult {
+    Found { username: String, public_key: [u8; 32] },
+    NotFound(String),
+    Searching,
+}
+
 /// Wrapper around Arc<GroupKey> that implements Debug (GroupKey intentionally omits Debug).
 #[derive(Clone)]
 pub struct SharedGroupKey(pub(crate) Arc<GroupKey>);

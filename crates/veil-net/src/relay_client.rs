@@ -28,6 +28,14 @@ pub enum RelayEvent {
         code: String,
         message: String,
     },
+    RegisterResult {
+        success: bool,
+        message: String,
+    },
+    LookupResult {
+        username: String,
+        public_key: Option<[u8; 32]>,
+    },
 }
 
 /// Commands sent to the relay client from the application.
@@ -40,6 +48,12 @@ pub enum RelayCommand {
         payload: Vec<u8>,
     },
     DrainMailbox,
+    Register {
+        username: String,
+        public_key: [u8; 32],
+        signature: Vec<u8>,
+    },
+    LookupUser(String),
     Shutdown,
 }
 
@@ -103,6 +117,31 @@ impl RelayClient {
     pub async fn unsubscribe(&self, tags: Vec<[u8; 32]>) -> Result<(), NetError> {
         self.cmd_tx
             .send(RelayCommand::Unsubscribe(tags))
+            .await
+            .map_err(|_| NetError::Connection("relay client shut down".into()))
+    }
+
+    /// Register a username on the relay directory.
+    pub async fn register_username(
+        &self,
+        username: String,
+        public_key: [u8; 32],
+        signature: Vec<u8>,
+    ) -> Result<(), NetError> {
+        self.cmd_tx
+            .send(RelayCommand::Register {
+                username,
+                public_key,
+                signature,
+            })
+            .await
+            .map_err(|_| NetError::Connection("relay client shut down".into()))
+    }
+
+    /// Look up a username on the relay directory.
+    pub async fn lookup_user(&self, username: String) -> Result<(), NetError> {
+        self.cmd_tx
+            .send(RelayCommand::LookupUser(username))
             .await
             .map_err(|_| NetError::Connection("relay client shut down".into()))
     }
@@ -283,6 +322,12 @@ async fn connect_and_run(
             RelayCommand::DrainMailbox => {
                 send_relay_msg(&conn, &RelayMessage::DrainMailbox).await?;
             }
+            RelayCommand::Register { username, public_key, signature } => {
+                send_relay_msg(&conn, &RelayMessage::Register { username, public_key, signature }).await?;
+            }
+            RelayCommand::LookupUser(username) => {
+                send_relay_msg(&conn, &RelayMessage::Lookup { username }).await?;
+            }
             RelayCommand::Shutdown => {
                 return Ok(ShutdownReason::CommandShutdown);
             }
@@ -305,6 +350,12 @@ async fn connect_and_run(
                         }
                         RelayMessage::MailboxBatch { messages, remaining } => {
                             let _ = event_tx.send(RelayEvent::MailboxDrained { messages, remaining }).await;
+                        }
+                        RelayMessage::RegisterResult { success, message } => {
+                            let _ = event_tx.send(RelayEvent::RegisterResult { success, message }).await;
+                        }
+                        RelayMessage::LookupResult { username, public_key } => {
+                            let _ = event_tx.send(RelayEvent::LookupResult { username, public_key }).await;
                         }
                         RelayMessage::Pong(_) => {}
                         RelayMessage::Status { code, message } => {
@@ -344,6 +395,12 @@ async fn connect_and_run(
                     }
                     Some(RelayCommand::DrainMailbox) => {
                         send_relay_msg(&conn, &RelayMessage::DrainMailbox).await?;
+                    }
+                    Some(RelayCommand::Register { username, public_key, signature }) => {
+                        send_relay_msg(&conn, &RelayMessage::Register { username, public_key, signature }).await?;
+                    }
+                    Some(RelayCommand::LookupUser(username)) => {
+                        send_relay_msg(&conn, &RelayMessage::Lookup { username }).await?;
                     }
                     Some(RelayCommand::Shutdown) | None => {
                         return Ok(ShutdownReason::CommandShutdown);

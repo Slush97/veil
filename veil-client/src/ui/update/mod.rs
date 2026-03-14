@@ -1,4 +1,5 @@
 mod chat;
+mod contacts;
 mod files;
 mod identity;
 mod invites;
@@ -155,6 +156,28 @@ impl App {
                 self.device_name_input = value;
             }
             Message::ExportIdentity => self.update_export_identity(),
+
+            // Username registry + contacts
+            Message::UsernameInputChanged(value) => {
+                self.username_input = value;
+            }
+            Message::ContactSearchInputChanged(value) => {
+                self.contact_search_input = value;
+            }
+            Message::RegisterUsername => self.update_register_username(),
+            Message::RegisterResult { success, message } => {
+                self.update_register_result(success, message);
+            }
+            Message::LookupContact => self.update_lookup_contact(),
+            Message::ContactFound { username, public_key } => {
+                self.update_contact_found(username, public_key);
+            }
+            Message::ContactNotFound(username) => {
+                self.update_contact_not_found(username);
+            }
+            Message::AddContact { username, public_key } => {
+                self.update_add_contact(username, public_key);
+            }
 
             // Keyboard shortcuts
             Message::EscapePressed => self.update_escape_pressed(),

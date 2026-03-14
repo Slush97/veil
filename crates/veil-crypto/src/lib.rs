@@ -1,3 +1,4 @@
+pub mod dm;
 pub mod group_key;
 pub mod identity;
 pub mod keystore;

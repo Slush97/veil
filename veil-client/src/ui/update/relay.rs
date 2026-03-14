@@ -24,6 +24,12 @@ impl App {
                 msg.status = Some(MessageStatus::Sent);
             }
         }
+
+        // Auto-register username if we have one pending (new account)
+        let username = self.username_input.trim().to_string();
+        if !username.is_empty() && self.username.is_none() {
+            self.update_register_username();
+        }
     }
 
     pub(crate) fn update_relay_disconnected(&mut self) {

@@ -22,6 +22,7 @@ hostname = "0.4"
 dirs.workspace = true
 rfd.workspace = true
 x25519-dalek.workspace = true
+ed25519-dalek.workspace = true
 notify-rust.workspace = true
 uuid.workspace = true
 

@@ -121,6 +121,16 @@ impl App {
                     self.display_names.insert(fp, name);
                 }
             }
+            // Load username
+            if let Ok(Some(stored_username)) = store.get_setting("username") {
+                self.username = Some(stored_username);
+            }
+
+            // Load contacts and create DM group states
+            if let Ok(contacts) = store.list_contacts() {
+                self.contacts = contacts;
+            }
+
             // Load settings
             if let Ok(Some(theme)) = store.get_setting("theme") {
                 self.theme_choice = if theme == "light" {

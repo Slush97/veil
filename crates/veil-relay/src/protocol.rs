@@ -58,6 +58,31 @@ pub enum RelayMessage {
         message: String,
     },
 
+    /// Client → Relay: register a username for directory lookup.
+    Register {
+        username: String,
+        public_key: [u8; 32],
+        /// Ed25519 signature over b"veil-register-v1:" || username_lowercase.
+        signature: Vec<u8>,
+    },
+
+    /// Client → Relay: look up a username in the directory.
+    Lookup {
+        username: String,
+    },
+
+    /// Relay → Client: result of a Register request.
+    RegisterResult {
+        success: bool,
+        message: String,
+    },
+
+    /// Relay → Client: result of a Lookup request.
+    LookupResult {
+        username: String,
+        public_key: Option<[u8; 32]>,
+    },
+
     Ping(u64),
     Pong(u64),
 }
@@ -81,7 +106,7 @@ pub enum StatusCode {
 }
 
 /// Current relay protocol version.
-pub const RELAY_PROTOCOL_VERSION: u32 = 1;
+pub const RELAY_PROTOCOL_VERSION: u32 = 2;
 
 impl RelayMessage {
     fn bincode_options() -> impl bincode::Options {

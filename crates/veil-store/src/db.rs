@@ -723,6 +723,87 @@ impl LocalStore {
         }
     }
 
+    /// Store a contact (username → public key).
+    pub fn store_contact(&self, username: &str, public_key: &[u8; 32]) -> Result<(), StoreError> {
+        let meta_key = format!("contact:{}", username.to_lowercase());
+        let encrypted = self
+            .storage_key
+            .encrypt(public_key.as_slice())
+            .map_err(|e| StoreError::Crypto(e.to_string()))?;
+
+        let tx = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        {
+            let mut table = tx
+                .open_table(METADATA)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            table
+                .insert(meta_key.as_str(), encrypted.as_slice())
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// List all stored contacts. Returns (username, public_key) pairs.
+    pub fn list_contacts(&self) -> Result<Vec<(String, [u8; 32])>, StoreError> {
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(METADATA)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut contacts = Vec::new();
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
+            let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
+            let key_str: &str = entry.0.value();
+            if !key_str.starts_with("contact:") {
+                continue;
+            }
+            let username = key_str[8..].to_string();
+            let encrypted: &[u8] = entry.1.value();
+            let plaintext = self
+                .storage_key
+                .decrypt(encrypted)
+                .map_err(|e| StoreError::Crypto(e.to_string()))?;
+            if plaintext.len() != 32 {
+                continue;
+            }
+            let mut public_key = [0u8; 32];
+            public_key.copy_from_slice(&plaintext);
+            contacts.push((username, public_key));
+        }
+        Ok(contacts)
+    }
+
+    /// Remove a contact by username.
+    pub fn remove_contact(&self, username: &str) -> Result<(), StoreError> {
+        let meta_key = format!("contact:{}", username.to_lowercase());
+        let tx = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        {
+            let mut table = tx
+                .open_table(METADATA)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            table
+                .remove(meta_key.as_str())
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
     /// Search messages by substring, returning matching sealed messages.
     pub fn search_messages(
         &self,
@@ -923,6 +1004,26 @@ mod tests {
             Some("127.0.0.1:4433".into())
         );
         assert_eq!(store.get_setting("nonexistent").unwrap(), None);
+    }
+
+    #[test]
+    fn store_and_list_contacts() {
+        let tmp = NamedTempFile::new().unwrap();
+        let storage_key = LocalStore::derive_storage_key(&[1u8; 32]);
+        let store = LocalStore::open(tmp.path(), storage_key).unwrap();
+
+        store.store_contact("alice", &[10u8; 32]).unwrap();
+        store.store_contact("bob", &[20u8; 32]).unwrap();
+
+        let contacts = store.list_contacts().unwrap();
+        assert_eq!(contacts.len(), 2);
+        assert!(contacts.iter().any(|(n, k)| n == "alice" && *k == [10u8; 32]));
+        assert!(contacts.iter().any(|(n, k)| n == "bob" && *k == [20u8; 32]));
+
+        store.remove_contact("alice").unwrap();
+        let contacts = store.list_contacts().unwrap();
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].0, "bob");
     }
 
     #[test]

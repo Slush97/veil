@@ -31,6 +31,18 @@ pub enum NetCommand {
         store: Arc<LocalStore>,
         identity_bytes: [u8; 32],
     },
+    /// Register username on relay directory.
+    RegisterUsername {
+        username: String,
+        public_key: [u8; 32],
+        signature: Vec<u8>,
+    },
+    /// Look up a username on the relay directory.
+    LookupUser(String),
+    /// Subscribe to additional routing tags on relay.
+    SubscribeRelay {
+        tags: Vec<[u8; 32]>,
+    },
     /// Send a presence signal to peers.
     SendPresence(WireMessage),
     /// Respond to a blob request from a peer (full blob fallback).
@@ -160,6 +172,15 @@ pub enum Message {
     ToggleNotifications,
     DeviceNameInputChanged(String),
     ExportIdentity,
+    // Username registry + contacts
+    UsernameInputChanged(String),
+    ContactSearchInputChanged(String),
+    RegisterUsername,
+    RegisterResult { success: bool, message: String },
+    LookupContact,
+    ContactFound { username: String, public_key: [u8; 32] },
+    ContactNotFound(String),
+    AddContact { username: String, public_key: [u8; 32] },
     // Keyboard shortcuts
     EscapePressed,
     UpArrowPressed,

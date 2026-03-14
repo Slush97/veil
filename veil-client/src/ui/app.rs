@@ -65,6 +65,13 @@ pub struct App {
     // Phase 5: Settings + visual polish
     pub(crate) theme_choice: ThemeChoice,
     pub(crate) device_name_input: String,
+    // Username registry + contacts
+    pub(crate) username_input: String,
+    pub(crate) username: Option<String>,
+    pub(crate) registration_status: Option<String>,
+    pub(crate) contacts: Vec<(String, [u8; 32])>,
+    pub(crate) contact_search_input: String,
+    pub(crate) contact_search_result: Option<ContactSearchResult>,
 }
 
 impl Default for App {
@@ -112,9 +119,19 @@ impl Default for App {
             // Phase 5
             theme_choice: ThemeChoice::Dark,
             device_name_input: String::new(),
+            // Username registry + contacts
+            username_input: String::new(),
+            username: None,
+            registration_status: None,
+            contacts: Vec::new(),
+            contact_search_input: String::new(),
+            contact_search_result: None,
         }
     }
 }
+
+/// Default relay address.
+pub(crate) const DEFAULT_RELAY: &str = "127.0.0.1:4433";
 
 impl App {
     pub fn theme(&self) -> Theme {

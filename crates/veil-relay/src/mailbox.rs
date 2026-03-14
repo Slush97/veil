@@ -5,6 +5,7 @@
 //! are efficient.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
@@ -19,21 +20,31 @@ const MESSAGES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("messages")
 const COUNTERS: TableDefinition<&[u8], u64> = TableDefinition::new("counters");
 
 pub struct MailboxStore {
-    db: Database,
+    db: Arc<Database>,
     max_per_tag: usize,
     max_total: usize,
     max_age: Duration,
 }
 
 impl MailboxStore {
+    /// Open the mailbox store with its own database file.
     pub fn open(
         path: &Path,
         max_per_tag: usize,
         max_total: usize,
         max_age: Duration,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let db = Database::create(path)?;
+        let db = Arc::new(Database::create(path)?);
+        Self::with_db(db, max_per_tag, max_total, max_age)
+    }
 
+    /// Create a mailbox store sharing an existing database.
+    pub fn with_db(
+        db: Arc<Database>,
+        max_per_tag: usize,
+        max_total: usize,
+        max_age: Duration,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // Ensure tables exist
         let txn = db.begin_write()?;
         {
@@ -48,6 +59,11 @@ impl MailboxStore {
             max_total,
             max_age,
         })
+    }
+
+    /// Get a reference to the underlying database for sharing with other stores.
+    pub fn database(&self) -> Arc<Database> {
+        self.db.clone()
     }
 
     /// Push a message into the mailbox for a routing tag.

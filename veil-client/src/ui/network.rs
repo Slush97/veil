@@ -239,6 +239,16 @@ pub(crate) fn network_worker(
                                         .await;
                                 }
                         }
+                        Some(RelayEvent::RegisterResult { success, message }) => {
+                            let _ = output.send(Message::RegisterResult { success, message }).await;
+                        }
+                        Some(RelayEvent::LookupResult { username, public_key }) => {
+                            if let Some(pk) = public_key {
+                                let _ = output.send(Message::ContactFound { username, public_key: pk }).await;
+                            } else {
+                                let _ = output.send(Message::ContactNotFound(username)).await;
+                            }
+                        }
                         Some(RelayEvent::Error { code, message }) => {
                             let _ = output.send(Message::RelayError { code, message }).await;
                         }
@@ -493,6 +503,21 @@ pub(crate) fn network_worker(
                                 Err(e) => {
                                     let _ = output.send(Message::FileFailed(format!("read error: {e}"))).await;
                                 }
+                            }
+                        }
+                        Some(NetCommand::RegisterUsername { username, public_key, signature }) => {
+                            if let Some(ref rc) = relay_client {
+                                let _ = rc.register_username(username, public_key, signature).await;
+                            }
+                        }
+                        Some(NetCommand::LookupUser(username)) => {
+                            if let Some(ref rc) = relay_client {
+                                let _ = rc.lookup_user(username).await;
+                            }
+                        }
+                        Some(NetCommand::SubscribeRelay { tags }) => {
+                            if let Some(ref rc) = relay_client {
+                                let _ = rc.subscribe(tags).await;
                             }
                         }
                         Some(NetCommand::SendPresence(wire_msg)) => {

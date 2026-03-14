@@ -167,6 +167,55 @@ impl App {
         invite_section =
             invite_section.push(button("Join").on_press(Message::AcceptInvite).padding(4));
 
+        // Contact search section
+        let mut contact_section = column![
+            text("Add Contact").size(12),
+            text_input("Search @username", &self.contact_search_input)
+                .on_input(Message::ContactSearchInputChanged)
+                .on_submit(Message::LookupContact)
+                .padding(4)
+                .width(Length::Fill),
+            button("Search")
+                .on_press(Message::LookupContact)
+                .padding(4),
+        ]
+        .spacing(4)
+        .padding(8);
+
+        if let Some(ref result) = self.contact_search_result {
+            match result {
+                crate::ui::types::ContactSearchResult::Found { username, public_key } => {
+                    let un = username.clone();
+                    let pk = *public_key;
+                    contact_section = contact_section.push(
+                        row![
+                            text(format!("@{un} found")).size(11),
+                            button("Add")
+                                .on_press(Message::AddContact { username: un, public_key: pk })
+                                .padding(4),
+                        ]
+                        .spacing(4),
+                    );
+                }
+                crate::ui::types::ContactSearchResult::NotFound(username) => {
+                    contact_section = contact_section.push(
+                        text(format!("@{username} not found")).size(11),
+                    );
+                }
+                crate::ui::types::ContactSearchResult::Searching => {
+                    contact_section = contact_section.push(
+                        text("Searching...").size(11),
+                    );
+                }
+            }
+        }
+
+        // Show username if registered
+        let mut user_section = Column::new().spacing(2).padding(8);
+        if let Some(ref username) = self.username {
+            user_section = user_section.push(text(format!("@{username}")).size(14));
+        }
+
         // Settings button at bottom
         let settings_button = container(
             button("Settings")
@@ -178,8 +227,10 @@ impl App {
 
         container(scrollable(
             column![
+                user_section,
                 group_list,
                 channel_list,
+                contact_section,
                 peers_section,
                 name_section,
                 lan_section,

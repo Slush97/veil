@@ -9,6 +9,7 @@ use quinn::Endpoint;
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, warn};
 
+use crate::directory::DirectoryStore;
 use crate::mailbox::MailboxStore;
 use crate::protocol::*;
 
@@ -258,9 +259,26 @@ fn verify_subscribe_signature(
     vk.verify(&payload, &sig).is_ok()
 }
 
+/// Verify an Ed25519 signature for username registration.
+fn verify_register_signature(
+    public_key: &[u8; 32],
+    message: &[u8],
+    signature: &[u8],
+) -> bool {
+    let Ok(vk) = VerifyingKey::from_bytes(public_key) else {
+        return false;
+    };
+    let Ok(sig_bytes): Result<[u8; 64], _> = signature.try_into() else {
+        return false;
+    };
+    let sig = Signature::from_bytes(&sig_bytes);
+    vk.verify(message, &sig).is_ok()
+}
+
 pub struct RelayServer {
     state: Arc<RwLock<RelayState>>,
     mailbox_store: Arc<MailboxStore>,
+    directory_store: Arc<DirectoryStore>,
     config_bind_addr: SocketAddr,
     #[allow(dead_code)]
     config_max_age: Duration,
@@ -279,6 +297,12 @@ impl RelayServer {
             .expect("failed to open mailbox database"),
         );
 
+        // Share the same database with the directory store
+        let directory_store = Arc::new(
+            DirectoryStore::new(mailbox_store.database())
+                .expect("failed to initialize directory store"),
+        );
+
         let bind_addr = config.bind_addr;
         let max_age = config.max_age;
         Self {
@@ -288,6 +312,7 @@ impl RelayServer {
                 mailbox_store.clone(),
             ))),
             mailbox_store,
+            directory_store,
             config_bind_addr: bind_addr,
             config_max_age: max_age,
         }
@@ -320,12 +345,13 @@ impl RelayServer {
             };
 
             let state = self.state.clone();
+            let directory = self.directory_store.clone();
             tokio::spawn(async move {
                 match incoming.await {
                     Ok(conn) => {
                         let addr = conn.remote_address();
                         debug!("client connected: {addr}");
-                        if let Err(e) = handle_client(state, conn).await {
+                        if let Err(e) = handle_client(state, directory, conn).await {
                             debug!("client {addr} disconnected: {e}");
                         }
                     }
@@ -342,6 +368,7 @@ impl RelayServer {
 
 async fn handle_client(
     state: Arc<RwLock<RelayState>>,
+    directory: Arc<DirectoryStore>,
     conn: quinn::Connection,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = conn.remote_address();
@@ -360,7 +387,8 @@ async fn handle_client(
         }
     };
 
-    if version != RELAY_PROTOCOL_VERSION {
+    // Accept current version and one prior for backward compatibility
+    if version != RELAY_PROTOCOL_VERSION && version != RELAY_PROTOCOL_VERSION - 1 {
         send_relay_message(
             &conn,
             &RelayMessage::Status {
@@ -419,7 +447,7 @@ async fn handle_client(
     });
 
     // Reader loop: process incoming messages from client.
-    let result = reader_loop(state.clone(), &conn, client_id).await;
+    let result = reader_loop(state.clone(), directory, &conn, client_id).await;
 
     // Cleanup.
     writer.abort();
@@ -434,6 +462,7 @@ async fn handle_client(
 
 async fn reader_loop(
     state: Arc<RwLock<RelayState>>,
+    directory: Arc<DirectoryStore>,
     conn: &quinn::Connection,
     client_id: ClientId,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -533,6 +562,112 @@ async fn reader_loop(
                     },
                 )
                 .await?;
+            }
+
+            RelayMessage::Register {
+                username,
+                public_key,
+                signature,
+            } => {
+                // Verify Ed25519 signature: signs b"veil-register-v1:" || username_lowercase
+                let valid = {
+                    let msg = format!("veil-register-v1:{}", username.to_lowercase());
+                    verify_register_signature(&public_key, msg.as_bytes(), &signature)
+                };
+
+                if !valid {
+                    send_relay_message(
+                        conn,
+                        &RelayMessage::RegisterResult {
+                            success: false,
+                            message: "invalid signature".into(),
+                        },
+                    )
+                    .await?;
+                    continue;
+                }
+
+                match directory.register(&username, &public_key) {
+                    Ok(crate::directory::RegisterOutcome::Success) => {
+                        send_relay_message(
+                            conn,
+                            &RelayMessage::RegisterResult {
+                                success: true,
+                                message: "registered".into(),
+                            },
+                        )
+                        .await?;
+                    }
+                    Ok(crate::directory::RegisterOutcome::UsernameTaken) => {
+                        send_relay_message(
+                            conn,
+                            &RelayMessage::RegisterResult {
+                                success: false,
+                                message: "username taken".into(),
+                            },
+                        )
+                        .await?;
+                    }
+                    Ok(crate::directory::RegisterOutcome::KeyAlreadyRegistered(existing)) => {
+                        send_relay_message(
+                            conn,
+                            &RelayMessage::RegisterResult {
+                                success: false,
+                                message: format!("key already registered as @{existing}"),
+                            },
+                        )
+                        .await?;
+                    }
+                    Ok(crate::directory::RegisterOutcome::InvalidUsername) => {
+                        send_relay_message(
+                            conn,
+                            &RelayMessage::RegisterResult {
+                                success: false,
+                                message: "invalid username (3-20 chars, alphanumeric + underscore)"
+                                    .into(),
+                            },
+                        )
+                        .await?;
+                    }
+                    Err(e) => {
+                        warn!("directory register error: {e}");
+                        send_relay_message(
+                            conn,
+                            &RelayMessage::RegisterResult {
+                                success: false,
+                                message: "internal error".into(),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+
+            RelayMessage::Lookup { username } => {
+                let result = directory.lookup(&username);
+                match result {
+                    Ok(public_key) => {
+                        send_relay_message(
+                            conn,
+                            &RelayMessage::LookupResult {
+                                username,
+                                public_key,
+                            },
+                        )
+                        .await?;
+                    }
+                    Err(e) => {
+                        warn!("directory lookup error: {e}");
+                        send_relay_message(
+                            conn,
+                            &RelayMessage::LookupResult {
+                                username,
+                                public_key: None,
+                            },
+                        )
+                        .await?;
+                    }
+                }
             }
 
             RelayMessage::Ping(seq) => {
