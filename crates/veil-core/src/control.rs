@@ -9,9 +9,7 @@
 //! device key → device certificate → master key → role in group.
 
 use serde::{Deserialize, Serialize};
-use veil_crypto::{
-    DeviceCertificate, DeviceRevocation, EpochReason, KeyEpoch, KeyPackage, PeerId,
-};
+use veil_crypto::{DeviceCertificate, DeviceRevocation, EpochReason, KeyEpoch, KeyPackage, PeerId};
 
 use crate::group::Role;
 
@@ -35,16 +33,12 @@ pub enum ControlMessage {
     ///
     /// Other members should store this certificate and accept messages
     /// signed by the new device key.
-    DeviceAnnouncement {
-        certificate: DeviceCertificate,
-    },
+    DeviceAnnouncement { certificate: DeviceCertificate },
 
     /// A device was revoked by its owner.
     ///
     /// Other members should reject future messages from the revoked device.
-    DeviceRevoked {
-        revocation: DeviceRevocation,
-    },
+    DeviceRevoked { revocation: DeviceRevocation },
 
     /// A new member was added to the group.
     MemberAdded {
@@ -68,10 +62,7 @@ pub enum ControlMessage {
     },
 
     /// Group metadata was updated (name, description, etc.).
-    MetadataUpdate {
-        field: MetadataField,
-        value: String,
-    },
+    MetadataUpdate { field: MetadataField, value: String },
 }
 
 /// Which piece of group metadata was updated.
@@ -92,13 +83,11 @@ impl ControlMessage {
             // Any member can revoke their own devices
             ControlMessage::DeviceRevoked { .. } => Role::Member,
             // Any member can trigger a scheduled rotation
-            ControlMessage::KeyRotation { epoch, .. } => {
-                match &epoch.reason {
-                    EpochReason::ScheduledRotation => Role::Member,
-                    EpochReason::Eviction { .. } => Role::Admin,
-                    EpochReason::Genesis => Role::Owner,
-                }
-            }
+            ControlMessage::KeyRotation { epoch, .. } => match &epoch.reason {
+                EpochReason::ScheduledRotation => Role::Member,
+                EpochReason::Eviction { .. } => Role::Admin,
+                EpochReason::Genesis => Role::Owner,
+            },
             // Only admins+ can manage membership
             ControlMessage::MemberAdded { .. } => Role::Admin,
             ControlMessage::MemberRemoved { .. } => Role::Admin,

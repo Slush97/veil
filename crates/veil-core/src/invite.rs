@@ -83,17 +83,13 @@ pub fn create_open_invite(
 }
 
 /// Accept an invite by decrypting the group key with the passphrase.
-pub fn accept_invite(
-    payload: &InvitePayload,
-    passphrase: &[u8],
-) -> Result<GroupKey, InviteError> {
+pub fn accept_invite(payload: &InvitePayload, passphrase: &[u8]) -> Result<GroupKey, InviteError> {
     match &payload.key_material {
         InviteKeyMaterial::Passphrase {
             salt,
             encrypted_group_key,
         } => {
-            let key =
-                GroupKey::decrypt_with_passphrase(encrypted_group_key, salt, passphrase)?;
+            let key = GroupKey::decrypt_with_passphrase(encrypted_group_key, salt, passphrase)?;
             Ok(key)
         }
     }

@@ -1,3 +1,5 @@
+#![allow(clippy::needless_pass_by_value)]
+
 mod ui;
 
 use iced::application;

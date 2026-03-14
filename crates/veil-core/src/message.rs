@@ -98,8 +98,8 @@ impl SealedMessage {
         group_id: &[u8; 32],
         identity: &Identity,
     ) -> Result<Self, veil_crypto::EncryptError> {
-        let plaintext =
-            bincode::serialize(content).map_err(|_| veil_crypto::EncryptError::SerializationFailed)?;
+        let plaintext = bincode::serialize(content)
+            .map_err(|_| veil_crypto::EncryptError::SerializationFailed)?;
         let ciphertext = group_key.encrypt(&plaintext)?;
         let id = MessageId::from_content(&ciphertext);
 
@@ -110,7 +110,8 @@ impl SealedMessage {
         let key_generation = group_key.generation();
 
         // Sign: id || routing_tag || ciphertext || key_generation || sent_at
-        let sig_payload = Self::signature_payload(&id, &routing_tag, &ciphertext, key_generation, sent_at);
+        let sig_payload =
+            Self::signature_payload(&id, &routing_tag, &ciphertext, key_generation, sent_at);
         let signature = identity.sign(&sig_payload);
 
         Ok(Self {
@@ -199,7 +200,7 @@ impl SealedMessage {
             for cert in device_certs {
                 if let Some(master_id) = cert.verify_message(&sig_payload, &self.signature) {
                     // Verify the master is a known member
-                    if known_members.iter().any(|m| *m == master_id) {
+                    if known_members.contains(&master_id) {
                         sender = Some(master_id);
                         break;
                     }

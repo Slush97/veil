@@ -113,7 +113,7 @@ impl MasterIdentity {
     pub fn generate() -> (Self, String) {
         let (phrase, entropy) = mnemonic::generate();
         let master_key_bytes = mnemonic::entropy_to_master_key(&entropy);
-        let identity = Identity::from_bytes(&*master_key_bytes);
+        let identity = Identity::from_bytes(&master_key_bytes);
 
         let master = Self { identity, entropy };
         (master, phrase)
@@ -123,7 +123,7 @@ impl MasterIdentity {
     pub fn from_phrase(phrase: &str) -> Result<Self, mnemonic::MnemonicError> {
         let entropy = mnemonic::phrase_to_entropy(phrase)?;
         let master_key_bytes = mnemonic::entropy_to_master_key(&entropy);
-        let identity = Identity::from_bytes(&*master_key_bytes);
+        let identity = Identity::from_bytes(&master_key_bytes);
         Ok(Self { identity, entropy })
     }
 
@@ -182,11 +182,8 @@ impl MasterIdentity {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let payload = DeviceRevocation::signature_payload(
-            device_peer_id,
-            &self.peer_id(),
-            revoked_at,
-        );
+        let payload =
+            DeviceRevocation::signature_payload(device_peer_id, &self.peer_id(), revoked_at);
         let signature = self.sign(&payload);
 
         DeviceRevocation {
@@ -200,7 +197,7 @@ impl MasterIdentity {
     /// Create from raw entropy bytes (for loading from storage).
     pub fn from_entropy(entropy: Zeroizing<[u8; 16]>) -> Self {
         let master_key_bytes = mnemonic::entropy_to_master_key(&entropy);
-        let identity = Identity::from_bytes(&*master_key_bytes);
+        let identity = Identity::from_bytes(&master_key_bytes);
         Self { identity, entropy }
     }
 
@@ -257,11 +254,7 @@ impl DeviceCertificate {
     /// device's key, and that this device is certified by a known master.
     ///
     /// Returns the master PeerId if verification succeeds.
-    pub fn verify_message(
-        &self,
-        message: &[u8],
-        signature: &[u8],
-    ) -> Option<PeerId> {
+    pub fn verify_message(&self, message: &[u8], signature: &[u8]) -> Option<PeerId> {
         // First: is the cert itself valid?
         if !self.verify() {
             return None;
@@ -292,11 +285,8 @@ impl DeviceRevocation {
 
     /// Verify this revocation was signed by the claimed master identity.
     pub fn verify(&self) -> bool {
-        let payload = Self::signature_payload(
-            &self.revoked_device_id,
-            &self.master_id,
-            self.revoked_at,
-        );
+        let payload =
+            Self::signature_payload(&self.revoked_device_id, &self.master_id, self.revoked_at);
         self.master_id.verify(&payload, &self.signature)
     }
 }
@@ -559,9 +549,6 @@ mod tests {
             master.device_sync_routing_tag(),
             recovered.device_sync_routing_tag()
         );
-        assert_eq!(
-            master.device_sync_key(),
-            recovered.device_sync_key()
-        );
+        assert_eq!(master.device_sync_key(), recovered.device_sync_key());
     }
 }

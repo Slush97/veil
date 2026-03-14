@@ -45,8 +45,7 @@ impl LocalStore {
 
     pub fn store_message(&self, msg: &SealedMessage) -> Result<(), StoreError> {
         let key = &msg.id.0;
-        let plaintext =
-            bincode::serialize(msg).map_err(|e| StoreError::Database(e.to_string()))?;
+        let plaintext = bincode::serialize(msg).map_err(|e| StoreError::Database(e.to_string()))?;
         let encrypted = self
             .storage_key
             .encrypt(&plaintext)
@@ -107,7 +106,10 @@ impl LocalStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         let mut messages = Vec::new();
-        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
             let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
             let value_bytes: &[u8] = entry.1.value();
             let plaintext = self
@@ -138,7 +140,10 @@ impl LocalStore {
 
         let mut messages = Vec::new();
         let mut skipped = 0;
-        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
             let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
             let value_bytes: &[u8] = entry.1.value();
             let plaintext = self
@@ -216,7 +221,10 @@ impl LocalStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         let mut groups = Vec::new();
-        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
             let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
             let key_str: &str = entry.0.value();
             if !key_str.starts_with("group:") {
@@ -224,8 +232,8 @@ impl LocalStore {
             }
 
             let group_id_hex = &key_str[6..];
-            let group_id_bytes = hex::decode(group_id_hex)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let group_id_bytes =
+                hex::decode(group_id_hex).map_err(|e| StoreError::Database(e.to_string()))?;
             if group_id_bytes.len() != 32 {
                 continue;
             }
@@ -241,9 +249,9 @@ impl LocalStore {
             if plaintext.len() < 4 {
                 continue;
             }
-            let name_len = u32::from_le_bytes(
-                plaintext[..4].try_into().unwrap(),
-            ) as usize;
+            let name_len =
+                u32::from_le_bytes(plaintext[..4].try_into().expect("slice is exactly 4 bytes"))
+                    as usize;
             if plaintext.len() < 4 + name_len + 32 + 8 {
                 continue;
             }
@@ -253,10 +261,14 @@ impl LocalStore {
             let generation = u64::from_le_bytes(
                 plaintext[4 + name_len + 32..4 + name_len + 40]
                     .try_into()
-                    .unwrap(),
+                    .expect("slice is exactly 8 bytes"),
             );
 
-            groups.push((group_id, name, GroupKey::from_raw_parts(key_bytes, generation)));
+            groups.push((
+                group_id,
+                name,
+                GroupKey::from_raw_parts(key_bytes, generation),
+            ));
         }
 
         Ok(groups)
@@ -396,8 +408,8 @@ impl LocalStore {
             }
 
             let group_id_hex = &key_str[9..];
-            let group_id_bytes = hex::decode(group_id_hex)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let group_id_bytes =
+                hex::decode(group_id_hex).map_err(|e| StoreError::Database(e.to_string()))?;
             if group_id_bytes.len() != 32 {
                 continue;
             }
@@ -414,7 +426,8 @@ impl LocalStore {
                 continue;
             }
             let name_len =
-                u32::from_le_bytes(plaintext[..4].try_into().unwrap()) as usize;
+                u32::from_le_bytes(plaintext[..4].try_into().expect("slice is exactly 4 bytes"))
+                    as usize;
             if plaintext.len() < 4 + name_len {
                 continue;
             }
@@ -574,7 +587,10 @@ impl LocalStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         let mut latest: Option<(i64, MessageId)> = None;
-        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
             let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
             let value_bytes: &[u8] = entry.1.value();
             let plaintext = self
@@ -600,11 +616,7 @@ impl LocalStore {
     }
 
     /// Store a display name for a peer.
-    pub fn store_display_name(
-        &self,
-        peer_fingerprint: &str,
-        name: &str,
-    ) -> Result<(), StoreError> {
+    pub fn store_display_name(&self, peer_fingerprint: &str, name: &str) -> Result<(), StoreError> {
         let meta_key = format!("name:{peer_fingerprint}");
         let encrypted = self
             .storage_key
@@ -639,7 +651,10 @@ impl LocalStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         let mut names = Vec::new();
-        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
             let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
             let key_str: &str = entry.0.value();
             if !key_str.starts_with("name:") {
@@ -726,7 +741,10 @@ impl LocalStore {
 
         let query_lower = query.to_lowercase();
         let mut results = Vec::new();
-        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
             let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
             let value_bytes: &[u8] = entry.1.value();
             let plaintext = self
@@ -741,12 +759,11 @@ impl LocalStore {
             }
 
             // Try to decrypt and check content
-            if let Ok((content, _)) = msg.verify_and_open(group_key, known_members) {
-                if let veil_core::MessageKind::Text(ref txt) = content.kind {
-                    if txt.to_lowercase().contains(&query_lower) {
-                        results.push(msg);
-                    }
-                }
+            if let Ok((content, _)) = msg.verify_and_open(group_key, known_members)
+                && let veil_core::MessageKind::Text(ref txt) = content.kind
+                && txt.to_lowercase().contains(&query_lower)
+            {
+                results.push(msg);
             }
         }
         Ok(results)
@@ -793,7 +810,9 @@ mod tests {
 
         let group_key = GroupKey::from_storage_key([42u8; 32]);
         let group_id = [1u8; 32];
-        store.store_group(&group_id, "Test Group", &group_key).unwrap();
+        store
+            .store_group(&group_id, "Test Group", &group_key)
+            .unwrap();
 
         let groups = store.list_groups().unwrap();
         assert_eq!(groups.len(), 1);
@@ -829,8 +848,7 @@ mod tests {
 
         let group_key = GroupKey::from_storage_key([42u8; 32]);
         let group_id = [1u8; 32];
-        let keyring =
-            veil_crypto::GroupKeyRing::new(group_key, b"alice".to_vec());
+        let keyring = veil_crypto::GroupKeyRing::new(group_key, b"alice".to_vec());
 
         store
             .store_group_v2(&group_id, "Test Group v2", &keyring)

@@ -190,10 +190,10 @@ impl MailboxStore {
             for entry in iter {
                 let entry = entry?;
                 let value = entry.1.value();
-                if let Ok(envelope) = bincode::deserialize::<ForwardEnvelope>(value) {
-                    if envelope.received_at < cutoff {
-                        keys_to_remove.push(entry.0.value().to_vec());
-                    }
+                if let Ok(envelope) = bincode::deserialize::<ForwardEnvelope>(value)
+                    && envelope.received_at < cutoff
+                {
+                    keys_to_remove.push(entry.0.value().to_vec());
                 }
             }
         }
@@ -238,13 +238,7 @@ mod tests {
 
     fn test_store() -> (MailboxStore, NamedTempFile) {
         let tmp = NamedTempFile::new().unwrap();
-        let store = MailboxStore::open(
-            tmp.path(),
-            100,
-            1000,
-            Duration::from_secs(86400),
-        )
-        .unwrap();
+        let store = MailboxStore::open(tmp.path(), 100, 1000, Duration::from_secs(86400)).unwrap();
         (store, tmp)
     }
 
@@ -288,16 +282,14 @@ mod tests {
         let tag = [2u8; 32];
 
         {
-            let store =
-                MailboxStore::open(&path, 100, 1000, Duration::from_secs(86400)).unwrap();
+            let store = MailboxStore::open(&path, 100, 1000, Duration::from_secs(86400)).unwrap();
             store.push(&make_envelope(tag, b"persist me")).unwrap();
             assert_eq!(store.total_count().unwrap(), 1);
         }
 
         // Reopen
         {
-            let store =
-                MailboxStore::open(&path, 100, 1000, Duration::from_secs(86400)).unwrap();
+            let store = MailboxStore::open(&path, 100, 1000, Duration::from_secs(86400)).unwrap();
             assert_eq!(store.total_count().unwrap(), 1);
             let (batch, _) = store.drain(&[tag], 10).unwrap();
             assert_eq!(batch.len(), 1);

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use veil_core::BlobId;
 use veil_crypto::Identity;
-use veil_net::{create_endpoint, PeerEvent, PeerManager, WireMessage};
+use veil_net::{PeerEvent, PeerManager, WireMessage, create_endpoint};
 
 #[tokio::test]
 async fn two_peers_connect_and_exchange_messages() {
@@ -64,9 +64,7 @@ async fn two_peers_connect_and_exchange_messages() {
     assert_eq!(session_key_1, session_key_2);
 
     // pm1 sends Ping to pm2
-    pm1.send_to(conn_id1, &WireMessage::Ping(42))
-        .await
-        .unwrap();
+    pm1.send_to(conn_id1, &WireMessage::Ping(42)).await.unwrap();
 
     // pm2 should receive the Ping
     let event = events2.recv().await.unwrap();
@@ -79,9 +77,7 @@ async fn two_peers_connect_and_exchange_messages() {
     }
 
     // pm2 sends Pong back via shared connections map
-    pm2.send_to(conn_id2, &WireMessage::Pong(42))
-        .await
-        .unwrap();
+    pm2.send_to(conn_id2, &WireMessage::Pong(42)).await.unwrap();
 
     // pm1 should receive the Pong
     let event = events1.recv().await.unwrap();
@@ -139,7 +135,10 @@ async fn challenge_response_rejects_wrong_identity() {
     // The connect should fail because the responder signs with id2's key
     // but claims to be fake_id — the signature verification will fail
     let result = pm1.connect(actual_addr2).await;
-    assert!(result.is_err(), "connection should fail with mismatched identity");
+    assert!(
+        result.is_err(),
+        "connection should fail with mismatched identity"
+    );
 }
 
 #[tokio::test]
@@ -163,7 +162,12 @@ async fn blob_full_request_and_response() {
     let conn2 = pm2.connections_handle();
     let tx2 = pm2.event_sender();
     tokio::spawn(PeerManager::accept_loop(
-        ep2, pid2, id2.to_bytes(), tx2, conn2, None,
+        ep2,
+        pid2,
+        id2.to_bytes(),
+        tx2,
+        conn2,
+        None,
     ));
 
     let conn_id1 = pm1.connect(addr2).await.unwrap();
@@ -178,9 +182,14 @@ async fn blob_full_request_and_response() {
 
     // Peer 1 sends BlobFullRequest
     let blob_id = BlobId([42u8; 32]);
-    pm1.send_to(conn_id1, &WireMessage::BlobFullRequest { blob_id: blob_id.clone() })
-        .await
-        .unwrap();
+    pm1.send_to(
+        conn_id1,
+        &WireMessage::BlobFullRequest {
+            blob_id: blob_id.clone(),
+        },
+    )
+    .await
+    .unwrap();
 
     // Peer 2 receives the request
     let ev = events2.recv().await.unwrap();
@@ -192,10 +201,13 @@ async fn blob_full_request_and_response() {
             assert_eq!(recv_id, blob_id);
             // Peer 2 responds with full blob data
             let data = vec![0xDE, 0xAD, 0xBE, 0xEF];
-            pm2.send_to(conn_id2, &WireMessage::BlobFull {
-                blob_id: recv_id,
-                data: data.clone(),
-            })
+            pm2.send_to(
+                conn_id2,
+                &WireMessage::BlobFull {
+                    blob_id: recv_id,
+                    data: data.clone(),
+                },
+            )
             .await
             .unwrap();
         }
@@ -206,7 +218,11 @@ async fn blob_full_request_and_response() {
     let ev = events1.recv().await.unwrap();
     match ev {
         PeerEvent::Message {
-            message: WireMessage::BlobFull { blob_id: recv_id, data },
+            message:
+                WireMessage::BlobFull {
+                    blob_id: recv_id,
+                    data,
+                },
             ..
         } => {
             assert_eq!(recv_id, blob_id);

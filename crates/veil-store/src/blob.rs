@@ -45,10 +45,7 @@ pub fn encode_blob(
     padded.resize(shard_size * DATA_SHARDS, 0);
 
     // Split into data shards
-    let mut shards: Vec<Vec<u8>> = padded
-        .chunks(shard_size)
-        .map(|c| c.to_vec())
-        .collect();
+    let mut shards: Vec<Vec<u8>> = padded.chunks(shard_size).map(|c| c.to_vec()).collect();
 
     // Add empty parity shards
     for _ in 0..PARITY_SHARDS {

@@ -30,13 +30,17 @@ pub struct MessageDeduplicator {
 impl MessageDeduplicator {
     pub fn new() -> Self {
         Self {
-            seen: LruCache::new(NonZeroUsize::new(DEFAULT_CAPACITY).unwrap()),
+            seen: LruCache::new(
+                NonZeroUsize::new(DEFAULT_CAPACITY).expect("DEFAULT_CAPACITY is non-zero"),
+            ),
         }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            seen: LruCache::new(NonZeroUsize::new(cap.max(1)).unwrap()),
+            seen: LruCache::new(
+                NonZeroUsize::new(cap.max(1)).expect("cap.max(1) is always non-zero"),
+            ),
         }
     }
 

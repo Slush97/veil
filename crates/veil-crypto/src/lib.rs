@@ -12,8 +12,8 @@ pub use identity::{
     MasterIdentity, PeerId,
 };
 pub use keystore::{
-    load_device_identity, load_identity, migrate_v1_to_v2, save_device_identity, save_identity,
-    KeystoreError,
+    KeystoreError, load_device_identity, load_identity, migrate_v1_to_v2, save_device_identity,
+    save_identity,
 };
 
 /// Hardened Argon2id parameters for key derivation.

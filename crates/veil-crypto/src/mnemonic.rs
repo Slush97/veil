@@ -88,7 +88,7 @@ pub fn phrase_to_entropy(phrase: &str) -> Result<Zeroizing<[u8; 16]>, MnemonicEr
         let index = wordlist
             .iter()
             .position(|w| *w == word_lower)
-            .ok_or_else(|| MnemonicError::UnknownWord(word_lower))?;
+            .ok_or(MnemonicError::UnknownWord(word_lower))?;
         for i in (0..11).rev() {
             bits.push(((index >> i) & 1) as u8);
         }
@@ -130,7 +130,7 @@ pub fn entropy_to_master_key(entropy: &[u8; 16]) -> Zeroizing<[u8; 32]> {
     let salt_bytes = &salt.as_bytes()[..16]; // Argon2 requires >= 8 byte salt
 
     crate::hardened_argon2()
-        .hash_password_into(&*entropy, salt_bytes, &mut *key)
+        .hash_password_into(entropy, salt_bytes, &mut *key)
         .expect("argon2 key derivation should not fail with valid params");
     key
 }

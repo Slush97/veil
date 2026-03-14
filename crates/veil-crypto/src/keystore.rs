@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
+    aead::{Aead, KeyInit},
 };
 use zeroize::Zeroizing;
 
@@ -275,8 +275,7 @@ mod tests {
         let device_pid = device.device_peer_id();
 
         save_device_identity(master.entropy(), &device, passphrase, &path).unwrap();
-        let (loaded_master, loaded_device) =
-            load_device_identity(passphrase, &path).unwrap();
+        let (loaded_master, loaded_device) = load_device_identity(passphrase, &path).unwrap();
 
         assert_eq!(loaded_master.peer_id(), master_pid);
         assert_eq!(loaded_device.device_peer_id(), device_pid);
@@ -310,8 +309,7 @@ mod tests {
         assert_eq!(device.master_peer_id(), master.peer_id());
 
         // Can now load as v2
-        let (loaded_master, loaded_device) =
-            load_device_identity(passphrase, &path).unwrap();
+        let (loaded_master, loaded_device) = load_device_identity(passphrase, &path).unwrap();
         assert_eq!(loaded_master.peer_id(), master.peer_id());
         assert_eq!(loaded_device.device_peer_id(), device.device_peer_id());
 

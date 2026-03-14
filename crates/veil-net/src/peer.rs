@@ -5,9 +5,9 @@ use quinn::{Endpoint, ServerConfig};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use veil_crypto::PeerId;
 
-use crate::framing;
-use crate::protocol::{WireMessage, MAX_WIRE_MESSAGE_SIZE};
 use crate::NetError;
+use crate::framing;
+use crate::protocol::{MAX_WIRE_MESSAGE_SIZE, WireMessage};
 
 /// A connection to a single peer.
 pub struct PeerConnection {
@@ -27,7 +27,9 @@ impl PeerConnection {
 
     /// Send a wire message to this peer.
     pub async fn send(&self, msg: &WireMessage) -> Result<(), NetError> {
-        let data = msg.encode().map_err(|e| NetError::Serialization(e.to_string()))?;
+        let data = msg
+            .encode()
+            .map_err(|e| NetError::Serialization(e.to_string()))?;
         framing::send_framed(&self.connection, &data).await
     }
 

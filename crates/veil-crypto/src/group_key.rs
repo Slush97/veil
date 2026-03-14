@@ -1,6 +1,6 @@
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
+    aead::{Aead, KeyInit},
 };
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -103,8 +103,8 @@ impl GroupKey {
 
     /// Encrypt plaintext with this group key.
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, EncryptError> {
-        let cipher = ChaCha20Poly1305::new_from_slice(&*self.key)
-            .map_err(|_| EncryptError::InvalidKey)?;
+        let cipher =
+            ChaCha20Poly1305::new_from_slice(&*self.key).map_err(|_| EncryptError::InvalidKey)?;
 
         let mut nonce_bytes = [0u8; 12];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
@@ -127,8 +127,8 @@ impl GroupKey {
         }
 
         let (nonce_bytes, ciphertext) = data.split_at(12);
-        let cipher = ChaCha20Poly1305::new_from_slice(&*self.key)
-            .map_err(|_| EncryptError::InvalidKey)?;
+        let cipher =
+            ChaCha20Poly1305::new_from_slice(&*self.key).map_err(|_| EncryptError::InvalidKey)?;
         let nonce = Nonce::from_slice(nonce_bytes);
 
         cipher
@@ -147,8 +147,8 @@ impl GroupKey {
         let shared_secret = eph.exchange(peer_dh_public);
         let derived = blake3::derive_key("veil-group-key-wrap", &*shared_secret);
 
-        let cipher = ChaCha20Poly1305::new_from_slice(&derived)
-            .map_err(|_| EncryptError::InvalidKey)?;
+        let cipher =
+            ChaCha20Poly1305::new_from_slice(&derived).map_err(|_| EncryptError::InvalidKey)?;
 
         let mut nonce_bytes = [0u8; 12];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
@@ -259,8 +259,8 @@ impl GroupKey {
         let derived = blake3::derive_key("veil-group-key-wrap", &*shared_secret);
 
         let (nonce_bytes, ciphertext) = data.split_at(12);
-        let cipher = ChaCha20Poly1305::new_from_slice(&derived)
-            .map_err(|_| EncryptError::InvalidKey)?;
+        let cipher =
+            ChaCha20Poly1305::new_from_slice(&derived).map_err(|_| EncryptError::InvalidKey)?;
         let nonce = Nonce::from_slice(nonce_bytes);
 
         let mut plaintext = cipher
@@ -285,7 +285,10 @@ impl GroupKey {
     }
 }
 
-fn derive_passphrase_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, EncryptError> {
+fn derive_passphrase_key(
+    passphrase: &[u8],
+    salt: &[u8],
+) -> Result<Zeroizing<[u8; 32]>, EncryptError> {
     let mut key = Zeroizing::new([0u8; 32]);
     crate::hardened_argon2()
         .hash_password_into(passphrase, salt, &mut *key)
@@ -434,11 +437,7 @@ impl GroupKeyRing {
     ///
     /// Called when the client receives a KeyRotation control message and
     /// successfully decrypts their KeyPackage.
-    pub fn apply_eviction(
-        &mut self,
-        new_key: GroupKey,
-        epoch: KeyEpoch,
-    ) {
+    pub fn apply_eviction(&mut self, new_key: GroupKey, epoch: KeyEpoch) {
         let old_key = std::mem::replace(&mut self.current, new_key);
         let old_epoch = std::mem::replace(&mut self.current_epoch, epoch);
         self.push_previous(old_key, old_epoch);
@@ -596,12 +595,12 @@ mod tests {
         let bob_eph_pub = *bob_eph.public_key();
 
         // Alice encrypts the group key for Bob using Bob's ephemeral public key
-        let (alice_eph_pub_bytes, encrypted) =
-            group_key.encrypt_for_peer(&bob_eph_pub).unwrap();
+        let (alice_eph_pub_bytes, encrypted) = group_key.encrypt_for_peer(&bob_eph_pub).unwrap();
 
         // Bob decrypts using his ephemeral secret and Alice's ephemeral public key
-        let alice_eph_pub =
-            x25519_dalek::PublicKey::from(<[u8; 32]>::try_from(alice_eph_pub_bytes.as_slice()).unwrap());
+        let alice_eph_pub = x25519_dalek::PublicKey::from(
+            <[u8; 32]>::try_from(alice_eph_pub_bytes.as_slice()).unwrap(),
+        );
         let decrypted = GroupKey::decrypt_from_peer(&encrypted, bob_eph, &alice_eph_pub).unwrap();
 
         // Verify the decrypted key works

@@ -31,11 +31,7 @@ impl Discovery {
     }
 
     /// Register this peer on the local network.
-    pub fn register(
-        &self,
-        port: u16,
-        fingerprint: &str,
-    ) -> Result<(), crate::NetError> {
+    pub fn register(&self, port: u16, fingerprint: &str) -> Result<(), crate::NetError> {
         let instance_name = format!("veil-{fingerprint}");
         let host = format!("{instance_name}.local.");
 
@@ -84,11 +80,9 @@ impl Discovery {
                             fingerprint,
                         })
                     }
-                    ServiceEvent::ServiceRemoved(_, fullname) => {
-                        Some(DiscoveryEvent::PeerLost {
-                            instance_name: fullname,
-                        })
-                    }
+                    ServiceEvent::ServiceRemoved(_, fullname) => Some(DiscoveryEvent::PeerLost {
+                        instance_name: fullname,
+                    }),
                     _ => None,
                 };
 

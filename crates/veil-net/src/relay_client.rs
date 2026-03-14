@@ -5,11 +5,11 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use veil_crypto::Identity;
 use veil_relay::protocol::{
-    ForwardEnvelope, RelayMessage, RELAY_PROTOCOL_VERSION, MAX_RELAY_MESSAGE_SIZE,
+    ForwardEnvelope, MAX_RELAY_MESSAGE_SIZE, RELAY_PROTOCOL_VERSION, RelayMessage,
 };
 
-use crate::framing;
 use crate::NetError;
+use crate::framing;
 
 /// Events emitted by the relay client to the application.
 #[derive(Debug)]
@@ -164,15 +164,11 @@ async fn relay_task(
             }
             Ok(ShutdownReason::Disconnected(reason)) => {
                 warn!("relay disconnected: {reason}, reconnecting in {backoff:?}");
-                let _ = event_tx
-                    .send(RelayEvent::Disconnected(reason))
-                    .await;
+                let _ = event_tx.send(RelayEvent::Disconnected(reason)).await;
             }
             Err(e) => {
                 warn!("relay connection failed: {e}, retrying in {backoff:?}");
-                let _ = event_tx
-                    .send(RelayEvent::Disconnected(e.to_string()))
-                    .await;
+                let _ = event_tx.send(RelayEvent::Disconnected(e.to_string())).await;
             }
         }
 
@@ -206,6 +202,7 @@ enum ShutdownReason {
     Disconnected(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn connect_and_run(
     relay_addr: &SocketAddr,
     endpoint: &quinn::Endpoint,
@@ -217,9 +214,7 @@ async fn connect_and_run(
     pending_commands: &mut Vec<RelayCommand>,
 ) -> Result<ShutdownReason, Box<dyn std::error::Error + Send + Sync>> {
     // Connect to relay
-    let conn = endpoint
-        .connect(*relay_addr, "veil-relay")?
-        .await?;
+    let conn = endpoint.connect(*relay_addr, "veil-relay")?.await?;
 
     info!("connected to relay at {relay_addr}");
 
@@ -255,15 +250,32 @@ async fn connect_and_run(
     send_relay_msg(&conn, &RelayMessage::DrainMailbox).await?;
 
     // Flush any commands buffered during reconnect
-    let buffered: Vec<RelayCommand> = pending_commands.drain(..).collect();
+    let buffered: Vec<RelayCommand> = std::mem::take(pending_commands);
     for cmd in buffered {
         match cmd {
-            RelayCommand::Forward { routing_tag, payload } => {
-                send_relay_msg(&conn, &RelayMessage::Forward { routing_tag, payload }).await?;
+            RelayCommand::Forward {
+                routing_tag,
+                payload,
+            } => {
+                send_relay_msg(
+                    &conn,
+                    &RelayMessage::Forward {
+                        routing_tag,
+                        payload,
+                    },
+                )
+                .await?;
             }
             RelayCommand::Subscribe(tags) => {
                 let signature = sign_tags(identity_bytes, &tags);
-                send_relay_msg(&conn, &RelayMessage::Subscribe { routing_tags: tags, signature }).await?;
+                send_relay_msg(
+                    &conn,
+                    &RelayMessage::Subscribe {
+                        routing_tags: tags,
+                        signature,
+                    },
+                )
+                .await?;
             }
             RelayCommand::Unsubscribe(tags) => {
                 send_relay_msg(&conn, &RelayMessage::Unsubscribe { routing_tags: tags }).await?;

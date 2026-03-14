@@ -3,12 +3,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use quinn::Endpoint;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use veil_crypto::{DeviceCertificate, EphemeralKeyPair, Identity, PeerId};
 
+use crate::NetError;
 use crate::peer::PeerConnection;
 use crate::protocol::{WireMessage, challenge_sign_payload};
-use crate::NetError;
 
 /// Identifies a connected peer.
 pub type ConnectionId = u64;
@@ -145,9 +145,7 @@ impl PeerManager {
         let sig_payload = challenge_sign_payload(&their_challenge, &self.our_peer_id);
         let our_sig = identity.sign(&sig_payload);
         peer_conn
-            .send(&WireMessage::ChallengeResponse {
-                signature: our_sig,
-            })
+            .send(&WireMessage::ChallengeResponse { signature: our_sig })
             .await?;
 
         // Step 4: DH key exchange - initiator sends first
@@ -220,11 +218,7 @@ impl PeerManager {
     }
 
     /// Send a message to a specific peer.
-    pub async fn send_to(
-        &self,
-        conn_id: ConnectionId,
-        msg: &WireMessage,
-    ) -> Result<(), NetError> {
+    pub async fn send_to(&self, conn_id: ConnectionId, msg: &WireMessage) -> Result<(), NetError> {
         let connections = self.connections.lock().await;
         let conn = connections
             .get(&conn_id)
@@ -395,11 +389,7 @@ impl PeerManager {
 }
 
 /// Derive a deterministic session key from the DH shared secret and sorted peer IDs.
-fn derive_session_key(
-    shared_secret: &[u8; 32],
-    peer_a: &PeerId,
-    peer_b: &PeerId,
-) -> [u8; 32] {
+fn derive_session_key(shared_secret: &[u8; 32], peer_a: &PeerId, peer_b: &PeerId) -> [u8; 32] {
     let (first, second) = if peer_a.verifying_key <= peer_b.verifying_key {
         (&peer_a.verifying_key, &peer_b.verifying_key)
     } else {

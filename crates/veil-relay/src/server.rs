@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use quinn::Endpoint;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, warn};
 
 use crate::mailbox::MailboxStore;
@@ -122,7 +122,10 @@ impl RelayState {
     }
 
     fn subscribe(&mut self, client_id: ClientId, tags: &[[u8; 32]]) -> Result<(), StatusCode> {
-        let client = self.clients.get_mut(&client_id).unwrap();
+        let client = self
+            .clients
+            .get_mut(&client_id)
+            .expect("client_id must exist in clients map");
         if client.subscribed_tags.len() + tags.len() > self.config_max_tags_per_client {
             return Err(StatusCode::TagLimitExceeded);
         }
@@ -264,6 +267,7 @@ pub struct RelayServer {
 }
 
 impl RelayServer {
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(config: RelayConfig) -> Self {
         let mailbox_store = Arc::new(
             MailboxStore::open(
@@ -361,9 +365,7 @@ async fn handle_client(
             &conn,
             &RelayMessage::Status {
                 code: StatusCode::BadVersion,
-                message: format!(
-                    "expected version {RELAY_PROTOCOL_VERSION}, got {version}"
-                ),
+                message: format!("expected version {RELAY_PROTOCOL_VERSION}, got {version}"),
             },
         )
         .await?;
@@ -427,7 +429,7 @@ async fn handle_client(
     }
     info!("client {addr} disconnected (id={client_id})");
 
-    result.map_err(Into::into)
+    result
 }
 
 async fn reader_loop(
@@ -439,7 +441,10 @@ async fn reader_loop(
         let msg = recv_relay_message(conn).await?;
 
         match msg {
-            RelayMessage::Subscribe { routing_tags, signature } => {
+            RelayMessage::Subscribe {
+                routing_tags,
+                signature,
+            } => {
                 // Verify signature before subscribing
                 let peer_id_bytes = {
                     let s = state.read().await;
@@ -507,11 +512,10 @@ async fn reader_loop(
                 if allowed {
                     // Fan out to online subscribers.
                     for (_sub_id, tx) in targets {
-                        let _ = tx
-                            .try_send(RelayMessage::Forward {
-                                routing_tag,
-                                payload: payload.clone(),
-                            });
+                        let _ = tx.try_send(RelayMessage::Forward {
+                            routing_tag,
+                            payload: payload.clone(),
+                        });
                     }
                 }
             }
@@ -577,9 +581,7 @@ async fn recv_relay_message(
 
 // --- QUIC endpoint setup (minimal, no app-layer crypto needed) ---
 
-fn create_relay_endpoint(
-    bind_addr: SocketAddr,
-) -> Result<Endpoint, Box<dyn std::error::Error>> {
+fn create_relay_endpoint(bind_addr: SocketAddr) -> Result<Endpoint, Box<dyn std::error::Error>> {
     use std::sync::Arc;
 
     let mut cn_bytes = [0u8; 8];

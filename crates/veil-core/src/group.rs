@@ -48,11 +48,7 @@ pub enum GroupError {
 }
 
 impl Group {
-    pub fn new(
-        name: String,
-        creator: PeerId,
-        creator_name: String,
-    ) -> Result<Self, GroupError> {
+    pub fn new(name: String, creator: PeerId, creator_name: String) -> Result<Self, GroupError> {
         let id_bytes = blake3::derive_key(
             "veil-group-id",
             &bincode::serialize(&(&name, &creator)).map_err(|_| GroupError::Serialization)?,

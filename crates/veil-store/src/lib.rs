@@ -1,7 +1,7 @@
 pub mod blob;
 pub mod db;
 
-pub use blob::{encode_blob, decode_blob, BlobShard, INLINE_THRESHOLD};
+pub use blob::{BlobShard, INLINE_THRESHOLD, decode_blob, encode_blob};
 pub use db::LocalStore;
 
 #[derive(Debug, thiserror::Error)]
