@@ -138,6 +138,8 @@ async fn relay_task(
 ) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(60);
+    let mut pending_commands: Vec<RelayCommand> = Vec::new();
+    const MAX_PENDING: usize = 500;
 
     loop {
         match connect_and_run(
@@ -148,6 +150,7 @@ async fn relay_task(
             &initial_tags,
             &mut cmd_rx,
             &event_tx,
+            &mut pending_commands,
         )
         .await
         {
@@ -169,13 +172,22 @@ async fn relay_task(
             }
         }
 
-        tokio::select! {
-            _ = tokio::time::sleep(backoff) => {}
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(RelayCommand::Shutdown) | None => return,
-                    // Discard other commands during reconnect
-                    _ => {}
+        // Buffer commands during reconnect backoff instead of discarding
+        let sleep = tokio::time::sleep(backoff);
+        tokio::pin!(sleep);
+
+        loop {
+            tokio::select! {
+                _ = &mut sleep => break,
+                cmd = cmd_rx.recv() => {
+                    match cmd {
+                        Some(RelayCommand::Shutdown) | None => return,
+                        Some(cmd) => {
+                            if pending_commands.len() < MAX_PENDING {
+                                pending_commands.push(cmd);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -198,6 +210,7 @@ async fn connect_and_run(
     initial_tags: &[[u8; 32]],
     cmd_rx: &mut mpsc::Receiver<RelayCommand>,
     event_tx: &mpsc::Sender<RelayEvent>,
+    pending_commands: &mut Vec<RelayCommand>,
 ) -> Result<ShutdownReason, Box<dyn std::error::Error + Send + Sync>> {
     // Connect to relay
     let conn = endpoint
@@ -236,6 +249,29 @@ async fn connect_and_run(
 
     // Drain mailbox on connect
     send_relay_msg(&conn, &RelayMessage::DrainMailbox).await?;
+
+    // Flush any commands buffered during reconnect
+    let buffered: Vec<RelayCommand> = pending_commands.drain(..).collect();
+    for cmd in buffered {
+        match cmd {
+            RelayCommand::Forward { routing_tag, payload } => {
+                send_relay_msg(&conn, &RelayMessage::Forward { routing_tag, payload }).await?;
+            }
+            RelayCommand::Subscribe(tags) => {
+                let signature = sign_tags(identity_bytes, &tags);
+                send_relay_msg(&conn, &RelayMessage::Subscribe { routing_tags: tags, signature }).await?;
+            }
+            RelayCommand::Unsubscribe(tags) => {
+                send_relay_msg(&conn, &RelayMessage::Unsubscribe { routing_tags: tags }).await?;
+            }
+            RelayCommand::DrainMailbox => {
+                send_relay_msg(&conn, &RelayMessage::DrainMailbox).await?;
+            }
+            RelayCommand::Shutdown => {
+                return Ok(ShutdownReason::CommandShutdown);
+            }
+        }
+    }
 
     // Main loop
     let mut ping_interval = tokio::time::interval(Duration::from_secs(30));

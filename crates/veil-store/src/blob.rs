@@ -3,6 +3,9 @@ use veil_crypto::GroupKey;
 
 use crate::StoreError;
 
+/// Files smaller than this are sent inline in the message (no sharding).
+pub const INLINE_THRESHOLD: usize = 1_048_576; // 1 MiB
+
 /// Number of data shards needed to reconstruct.
 pub const DATA_SHARDS: usize = 4;
 /// Total shards (data + parity).

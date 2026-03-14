@@ -1,0 +1,23 @@
+# Multi-stage build for minimal relay image
+# The relay binary is ~5 MB, no database, no secrets, no config files.
+
+FROM rust:1.87-slim AS builder
+
+RUN apt-get update && apt-get install -y pkg-config && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . .
+
+RUN cargo build --release --bin veil-relay
+
+# Runtime: distroless for minimal attack surface
+# No shell, no package manager, no extra binaries — just the relay.
+FROM gcr.io/distroless/cc-debian12
+
+COPY --from=builder /build/target/release/veil-relay /veil-relay
+
+# QUIC/UDP port
+EXPOSE 4433/udp
+
+ENTRYPOINT ["/veil-relay"]
+CMD ["0.0.0.0:4433"]

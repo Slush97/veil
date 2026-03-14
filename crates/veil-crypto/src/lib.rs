@@ -1,10 +1,20 @@
 pub mod group_key;
 pub mod identity;
 pub mod keystore;
+pub mod mnemonic;
 
-pub use group_key::{EncryptError, GroupKey};
-pub use identity::{EphemeralKeyPair, Identity, PeerId};
-pub use keystore::{load_identity, save_identity, KeystoreError};
+pub use group_key::{
+    EncryptError, EpochReason, GroupKey, GroupKeyRing, KeyEpoch, KeyPackage, KeyRingData,
+    KeyRingEntry,
+};
+pub use identity::{
+    DeviceCertificate, DeviceIdentity, DeviceRevocation, EphemeralKeyPair, Identity,
+    MasterIdentity, PeerId,
+};
+pub use keystore::{
+    load_device_identity, load_identity, migrate_v1_to_v2, save_device_identity, save_identity,
+    KeystoreError,
+};
 
 /// Hardened Argon2id parameters for key derivation.
 /// 64 MiB memory, 3 iterations, 1 parallelism lane.

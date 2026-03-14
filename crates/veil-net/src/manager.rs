@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use quinn::Endpoint;
 use tokio::sync::{mpsc, Mutex};
-use veil_crypto::{EphemeralKeyPair, Identity, PeerId};
+use veil_crypto::{DeviceCertificate, EphemeralKeyPair, Identity, PeerId};
 
 use crate::peer::PeerConnection;
 use crate::protocol::{WireMessage, challenge_sign_payload};
@@ -22,6 +22,8 @@ pub enum PeerEvent {
         peer_id: PeerId,
         /// Ephemeral DH-derived pairwise session key for this connection.
         session_key: [u8; 32],
+        /// Device certificate from the peer (if they're using the new key management).
+        device_certificate: Option<DeviceCertificate>,
     },
     /// A peer disconnected.
     Disconnected { conn_id: ConnectionId },
@@ -42,6 +44,7 @@ pub struct PeerManager {
     event_rx: Option<mpsc::Receiver<PeerEvent>>,
     our_peer_id: PeerId,
     identity_bytes: [u8; 32],
+    device_cert: Option<DeviceCertificate>,
 }
 
 impl PeerManager {
@@ -55,7 +58,13 @@ impl PeerManager {
             event_rx: Some(event_rx),
             our_peer_id,
             identity_bytes,
+            device_cert: None,
         }
+    }
+
+    /// Set the device certificate to include in Hello messages.
+    pub fn set_device_cert(&mut self, cert: DeviceCertificate) {
+        self.device_cert = Some(cert);
     }
 
     /// Take the event receiver. Can only be called once.
@@ -96,17 +105,19 @@ impl PeerManager {
             version: 1,
             challenge: our_challenge,
             signature: vec![],
+            device_certificate: self.device_cert.clone(),
         };
         peer_conn.send(&hello).await?;
 
         // Step 2: Receive Hello response with their challenge + signature
         let response = peer_conn.recv().await?;
-        let (peer_id, their_challenge) = match response {
+        let (peer_id, their_challenge, peer_device_cert) = match response {
             WireMessage::Hello {
                 peer_id,
                 version,
                 challenge,
                 signature,
+                device_certificate,
             } => {
                 if version != 1 {
                     return Err(NetError::Protocol(format!(
@@ -120,7 +131,7 @@ impl PeerManager {
                         "peer failed challenge-response authentication".into(),
                     ));
                 }
-                (peer_id, challenge)
+                (peer_id, challenge, device_certificate)
             }
             _ => {
                 return Err(NetError::Protocol(
@@ -172,6 +183,7 @@ impl PeerManager {
                 conn_id,
                 peer_id: peer_id.clone(),
                 session_key,
+                device_certificate: peer_device_cert,
             })
             .await;
 
@@ -235,6 +247,7 @@ impl PeerManager {
         identity_bytes: [u8; 32],
         event_tx: mpsc::Sender<PeerEvent>,
         connections: Arc<Mutex<HashMap<ConnectionId, Arc<PeerConnection>>>>,
+        our_device_cert: Option<DeviceCertificate>,
     ) {
         let mut next_id: ConnectionId = 1_000_000; // Offset from outbound IDs
         while let Some(incoming) = endpoint.accept().await {
@@ -250,18 +263,19 @@ impl PeerManager {
             let peer_conn = PeerConnection::new(connection, addr);
 
             // Step 1: Receive Hello from the connecting peer (initiator)
-            let (peer_id, their_challenge) = match peer_conn.recv().await {
+            let (peer_id, their_challenge, peer_device_cert) = match peer_conn.recv().await {
                 Ok(WireMessage::Hello {
                     peer_id,
                     version,
                     challenge,
+                    device_certificate,
                     ..
                 }) => {
                     if version != 1 {
                         tracing::warn!("rejecting peer with unsupported version {version}");
                         continue;
                     }
-                    (peer_id, challenge)
+                    (peer_id, challenge, device_certificate)
                 }
                 _ => {
                     tracing::warn!("peer didn't send Hello, disconnecting");
@@ -282,6 +296,7 @@ impl PeerManager {
                 version: 1,
                 challenge: our_challenge,
                 signature: our_sig,
+                device_certificate: our_device_cert.clone(),
             };
             if peer_conn.send(&hello).await.is_err() {
                 continue;
@@ -344,6 +359,7 @@ impl PeerManager {
                     conn_id,
                     peer_id: peer_id.clone(),
                     session_key,
+                    device_certificate: peer_device_cert,
                 })
                 .await;
 

@@ -70,3 +70,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 futures = "0.3"
+dirs = "6"
+rfd = "0.15"
+notify-rust = "4"

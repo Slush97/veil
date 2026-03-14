@@ -1,8 +1,10 @@
+pub mod control;
 pub mod dedup;
 pub mod group;
 pub mod invite;
 pub mod message;
 
+pub use control::{ControlMessage, MetadataField};
 pub use dedup::{DeduplicateError, MessageDeduplicator};
 pub use group::{Channel, ChannelKind, Group, GroupError, Member, Role};
 pub use invite::{InviteError, InviteKeyMaterial, InvitePayload};

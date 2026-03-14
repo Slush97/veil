@@ -1,7 +1,7 @@
 use bincode::Options;
 use serde::{Deserialize, Serialize};
 use veil_core::{BlobId, GroupId, MessageId, SealedMessage};
-use veil_crypto::PeerId;
+use veil_crypto::{DeviceCertificate, PeerId};
 
 /// Maximum size of a single wire message (16 MiB).
 pub const MAX_WIRE_MESSAGE_SIZE: u64 = 16 * 1024 * 1024;
@@ -20,6 +20,9 @@ pub enum WireMessage {
         /// Ed25519 signature proving ownership of peer_id.
         /// Empty on the initiator's first message.
         signature: Vec<u8>,
+        /// Optional device certificate proving this device belongs to a master identity.
+        /// Backward-compatible: old decoders ignore the extra field via `allow_trailing_bytes()`.
+        device_certificate: Option<DeviceCertificate>,
     },
 
     /// Initiator's response to the responder's challenge.
@@ -66,9 +69,41 @@ pub enum WireMessage {
         inviter_eph_public: Vec<u8>,
     },
 
+    /// Request the full encrypted blob (fallback when not enough shards are available).
+    BlobFullRequest {
+        blob_id: BlobId,
+    },
+
+    /// Provide the full encrypted blob.
+    BlobFull {
+        blob_id: BlobId,
+        data: Vec<u8>,
+    },
+
+    /// Ephemeral presence signals — not persisted, not group-encrypted.
+    /// Typing indicators and read receipts flow through here.
+    Presence {
+        kind: PresenceKind,
+        /// Which group this applies to.
+        group_id: GroupId,
+        /// Sender's PeerId for display.
+        sender: PeerId,
+    },
+
     /// Ping/pong for keepalive.
     Ping(u64),
     Pong(u64),
+}
+
+/// Lightweight presence signals that don't need group-key encryption.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PresenceKind {
+    /// User is currently typing.
+    Typing,
+    /// User stopped typing.
+    StoppedTyping,
+    /// User has read messages up to this ID.
+    ReadReceipt { last_read: MessageId },
 }
 
 impl WireMessage {

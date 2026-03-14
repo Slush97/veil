@@ -2,7 +2,7 @@ use std::path::Path;
 
 use redb::{Database, ReadableTable, TableDefinition};
 use veil_core::{MessageId, SealedMessage};
-use veil_crypto::GroupKey;
+use veil_crypto::{DeviceCertificate, GroupKey, GroupKeyRing};
 
 use crate::StoreError;
 
@@ -262,6 +262,275 @@ impl LocalStore {
         Ok(groups)
     }
 
+    /// Store a device certificate in the metadata table.
+    pub fn store_device_cert(
+        &self,
+        device_id: &veil_crypto::PeerId,
+        cert: &DeviceCertificate,
+    ) -> Result<(), StoreError> {
+        let cert_bytes =
+            bincode::serialize(cert).map_err(|e| StoreError::Database(e.to_string()))?;
+        let encrypted = self
+            .storage_key
+            .encrypt(&cert_bytes)
+            .map_err(|e| StoreError::Crypto(e.to_string()))?;
+
+        let meta_key = format!("devcert:{}", device_id.fingerprint());
+
+        let tx = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        {
+            let mut table = tx
+                .open_table(METADATA)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            table
+                .insert(meta_key.as_str(), encrypted.as_slice())
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// List all stored device certificates.
+    pub fn list_device_certs(&self) -> Result<Vec<DeviceCertificate>, StoreError> {
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(METADATA)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut certs = Vec::new();
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
+            let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
+            let key_str: &str = entry.0.value();
+            if !key_str.starts_with("devcert:") {
+                continue;
+            }
+
+            let encrypted: &[u8] = entry.1.value();
+            let plaintext = self
+                .storage_key
+                .decrypt(encrypted)
+                .map_err(|e| StoreError::Crypto(e.to_string()))?;
+
+            let cert: DeviceCertificate = bincode::deserialize(&plaintext)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            certs.push(cert);
+        }
+
+        Ok(certs)
+    }
+
+    /// Store a group with its full keyring (v2 format).
+    pub fn store_group_v2(
+        &self,
+        group_id: &[u8; 32],
+        group_name: &str,
+        keyring: &GroupKeyRing,
+    ) -> Result<(), StoreError> {
+        let ring_data = keyring.to_persist_data();
+        let ring_bytes =
+            bincode::serialize(&ring_data).map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // Serialize: name_len(4) + name + ring_data
+        let name_bytes = group_name.as_bytes();
+        let mut plaintext = Vec::with_capacity(4 + name_bytes.len() + ring_bytes.len());
+        plaintext.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+        plaintext.extend_from_slice(name_bytes);
+        plaintext.extend_from_slice(&ring_bytes);
+
+        let encrypted = self
+            .storage_key
+            .encrypt(&plaintext)
+            .map_err(|e| StoreError::Crypto(e.to_string()))?;
+
+        let meta_key = format!("group_v2:{}", hex::encode(group_id));
+
+        let tx = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        {
+            let mut table = tx
+                .open_table(METADATA)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            table
+                .insert(meta_key.as_str(), encrypted.as_slice())
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Load all v2 groups from the metadata table.
+    /// Returns (group_id, group_name, GroupKeyRing) tuples.
+    pub fn list_groups_v2(&self) -> Result<Vec<([u8; 32], String, GroupKeyRing)>, StoreError> {
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(METADATA)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut groups = Vec::new();
+        for entry in table
+            .iter()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
+            let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
+            let key_str: &str = entry.0.value();
+            if !key_str.starts_with("group_v2:") {
+                continue;
+            }
+
+            let group_id_hex = &key_str[9..];
+            let group_id_bytes = hex::decode(group_id_hex)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            if group_id_bytes.len() != 32 {
+                continue;
+            }
+            let mut group_id = [0u8; 32];
+            group_id.copy_from_slice(&group_id_bytes);
+
+            let encrypted: &[u8] = entry.1.value();
+            let plaintext = self
+                .storage_key
+                .decrypt(encrypted)
+                .map_err(|e| StoreError::Crypto(e.to_string()))?;
+
+            if plaintext.len() < 4 {
+                continue;
+            }
+            let name_len =
+                u32::from_le_bytes(plaintext[..4].try_into().unwrap()) as usize;
+            if plaintext.len() < 4 + name_len {
+                continue;
+            }
+            let name = String::from_utf8_lossy(&plaintext[4..4 + name_len]).to_string();
+
+            let ring_data: veil_crypto::KeyRingData =
+                bincode::deserialize(&plaintext[4 + name_len..])
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            let keyring = GroupKeyRing::from_persist_data(ring_data);
+
+            groups.push((group_id, name, keyring));
+        }
+
+        Ok(groups)
+    }
+
+    /// Store a full encrypted blob locally. The sender always keeps a complete copy
+    /// so recipients can fall back to direct transfer if not enough shards are available.
+    pub fn store_blob_full(
+        &self,
+        blob_id: &veil_core::BlobId,
+        encrypted_data: &[u8],
+    ) -> Result<(), StoreError> {
+        let encrypted = self
+            .storage_key
+            .encrypt(encrypted_data)
+            .map_err(|e| StoreError::Crypto(e.to_string()))?;
+
+        // Use "full:" prefix to distinguish from shards
+        let mut key = b"full:".to_vec();
+        key.extend_from_slice(&blob_id.0);
+
+        let tx = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        {
+            let mut table = tx
+                .open_table(BLOBS)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            table
+                .insert(key.as_slice(), encrypted.as_slice())
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Retrieve a full encrypted blob by ID.
+    pub fn get_blob_full(
+        &self,
+        blob_id: &veil_core::BlobId,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        let mut key = b"full:".to_vec();
+        key.extend_from_slice(&blob_id.0);
+
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(BLOBS)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        match table
+            .get(key.as_slice())
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
+            Some(value) => {
+                let plaintext = self
+                    .storage_key
+                    .decrypt(value.value())
+                    .map_err(|e| StoreError::Crypto(e.to_string()))?;
+                Ok(Some(plaintext))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// List available shard indices for a blob.
+    pub fn list_blob_shards(
+        &self,
+        blob_id: &veil_core::BlobId,
+    ) -> Result<Vec<crate::blob::BlobShard>, StoreError> {
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(BLOBS)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut shards = Vec::new();
+        for idx in 0..crate::blob::TOTAL_SHARDS as u8 {
+            let mut key = blob_id.0.to_vec();
+            key.push(idx);
+
+            if let Some(value) = table
+                .get(key.as_slice())
+                .map_err(|e| StoreError::Database(e.to_string()))?
+            {
+                let plaintext = self
+                    .storage_key
+                    .decrypt(value.value())
+                    .map_err(|e| StoreError::Crypto(e.to_string()))?;
+                let shard: crate::blob::BlobShard = bincode::deserialize(&plaintext)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                shards.push(shard);
+            }
+        }
+
+        Ok(shards)
+    }
+
     pub fn store_blob_shard(&self, shard: &crate::blob::BlobShard) -> Result<(), StoreError> {
         let mut key = shard.blob_id.0.to_vec();
         key.push(shard.shard_index);
@@ -289,6 +558,198 @@ impl LocalStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         Ok(())
+    }
+
+    /// Get the latest message ID for a routing tag (for sync protocol).
+    pub fn latest_message_id_by_tag(
+        &self,
+        routing_tag: &[u8; 32],
+    ) -> Result<Option<MessageId>, StoreError> {
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(MESSAGES)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut latest: Option<(i64, MessageId)> = None;
+        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+            let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
+            let value_bytes: &[u8] = entry.1.value();
+            let plaintext = self
+                .storage_key
+                .decrypt(value_bytes)
+                .map_err(|e| StoreError::Crypto(e.to_string()))?;
+            let msg: SealedMessage = bincode::deserialize(&plaintext)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            if msg.routing_tag == *routing_tag {
+                match &latest {
+                    Some((ts, _)) if msg.sent_at > *ts => {
+                        latest = Some((msg.sent_at, msg.id));
+                    }
+                    None => {
+                        latest = Some((msg.sent_at, msg.id));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(latest.map(|(_, id)| id))
+    }
+
+    /// Store a display name for a peer.
+    pub fn store_display_name(
+        &self,
+        peer_fingerprint: &str,
+        name: &str,
+    ) -> Result<(), StoreError> {
+        let meta_key = format!("name:{peer_fingerprint}");
+        let encrypted = self
+            .storage_key
+            .encrypt(name.as_bytes())
+            .map_err(|e| StoreError::Crypto(e.to_string()))?;
+
+        let tx = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        {
+            let mut table = tx
+                .open_table(METADATA)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            table
+                .insert(meta_key.as_str(), encrypted.as_slice())
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Load all display names.
+    pub fn list_display_names(&self) -> Result<Vec<(String, String)>, StoreError> {
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(METADATA)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut names = Vec::new();
+        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+            let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
+            let key_str: &str = entry.0.value();
+            if !key_str.starts_with("name:") {
+                continue;
+            }
+            let fingerprint = key_str[5..].to_string();
+            let encrypted: &[u8] = entry.1.value();
+            let plaintext = self
+                .storage_key
+                .decrypt(encrypted)
+                .map_err(|e| StoreError::Crypto(e.to_string()))?;
+            let name = String::from_utf8_lossy(&plaintext).to_string();
+            names.push((fingerprint, name));
+        }
+        Ok(names)
+    }
+
+    /// Store a setting value.
+    pub fn store_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        let meta_key = format!("setting:{key}");
+        let encrypted = self
+            .storage_key
+            .encrypt(value.as_bytes())
+            .map_err(|e| StoreError::Crypto(e.to_string()))?;
+
+        let tx = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        {
+            let mut table = tx
+                .open_table(METADATA)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            table
+                .insert(meta_key.as_str(), encrypted.as_slice())
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Get a setting value.
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        let meta_key = format!("setting:{key}");
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(METADATA)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        match table
+            .get(meta_key.as_str())
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        {
+            Some(value) => {
+                let plaintext = self
+                    .storage_key
+                    .decrypt(value.value())
+                    .map_err(|e| StoreError::Crypto(e.to_string()))?;
+                Ok(Some(String::from_utf8_lossy(&plaintext).to_string()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Search messages by substring, returning matching sealed messages.
+    pub fn search_messages(
+        &self,
+        routing_tag: &[u8; 32],
+        group_key: &GroupKey,
+        known_members: &[veil_crypto::PeerId],
+        query: &str,
+    ) -> Result<Vec<SealedMessage>, StoreError> {
+        let tx = self
+            .db
+            .begin_read()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let table = tx
+            .open_table(MESSAGES)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let query_lower = query.to_lowercase();
+        let mut results = Vec::new();
+        for entry in table.iter().map_err(|e| StoreError::Database(e.to_string()))? {
+            let entry = entry.map_err(|e| StoreError::Database(e.to_string()))?;
+            let value_bytes: &[u8] = entry.1.value();
+            let plaintext = self
+                .storage_key
+                .decrypt(value_bytes)
+                .map_err(|e| StoreError::Crypto(e.to_string()))?;
+            let msg: SealedMessage = bincode::deserialize(&plaintext)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            if msg.routing_tag != *routing_tag {
+                continue;
+            }
+
+            // Try to decrypt and check content
+            if let Ok((content, _)) = msg.verify_and_open(group_key, known_members) {
+                if let veil_core::MessageKind::Text(ref txt) = content.kind {
+                    if txt.to_lowercase().contains(&query_lower) {
+                        results.push(msg);
+                    }
+                }
+            }
+        }
+        Ok(results)
     }
 }
 
@@ -341,6 +802,48 @@ mod tests {
     }
 
     #[test]
+    fn store_and_list_device_certs() {
+        let tmp = NamedTempFile::new().unwrap();
+        let storage_key = LocalStore::derive_storage_key(&[1u8; 32]);
+        let store = LocalStore::open(tmp.path(), storage_key).unwrap();
+
+        let (master, _) = veil_crypto::MasterIdentity::generate();
+        let device = veil_crypto::DeviceIdentity::new(&master, "Phone".into());
+        let cert = device.certificate().clone();
+
+        store
+            .store_device_cert(&device.device_peer_id(), &cert)
+            .unwrap();
+
+        let certs = store.list_device_certs().unwrap();
+        assert_eq!(certs.len(), 1);
+        assert_eq!(certs[0].device_name, "Phone");
+        assert!(certs[0].verify());
+    }
+
+    #[test]
+    fn store_and_list_groups_v2() {
+        let tmp = NamedTempFile::new().unwrap();
+        let storage_key = LocalStore::derive_storage_key(&[1u8; 32]);
+        let store = LocalStore::open(tmp.path(), storage_key).unwrap();
+
+        let group_key = GroupKey::from_storage_key([42u8; 32]);
+        let group_id = [1u8; 32];
+        let keyring =
+            veil_crypto::GroupKeyRing::new(group_key, b"alice".to_vec());
+
+        store
+            .store_group_v2(&group_id, "Test Group v2", &keyring)
+            .unwrap();
+
+        let groups = store.list_groups_v2().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, group_id);
+        assert_eq!(groups[0].1, "Test Group v2");
+        assert_eq!(groups[0].2.generation(), 0);
+    }
+
+    #[test]
     fn list_messages_by_tag() {
         let tmp = NamedTempFile::new().unwrap();
         let storage_key = LocalStore::derive_storage_key(&[1u8; 32]);
@@ -370,5 +873,64 @@ mod tests {
         // Test pagination
         let paged = store.list_messages_by_tag(&tag_a, 2, 0).unwrap();
         assert_eq!(paged.len(), 2);
+    }
+
+    #[test]
+    fn store_and_list_display_names() {
+        let tmp = NamedTempFile::new().unwrap();
+        let storage_key = LocalStore::derive_storage_key(&[1u8; 32]);
+        let store = LocalStore::open(tmp.path(), storage_key).unwrap();
+
+        store.store_display_name("abc123", "Alice").unwrap();
+        store.store_display_name("def456", "Bob").unwrap();
+
+        let names = store.list_display_names().unwrap();
+        assert_eq!(names.len(), 2);
+        assert!(names.iter().any(|(fp, n)| fp == "abc123" && n == "Alice"));
+        assert!(names.iter().any(|(fp, n)| fp == "def456" && n == "Bob"));
+    }
+
+    #[test]
+    fn store_and_get_settings() {
+        let tmp = NamedTempFile::new().unwrap();
+        let storage_key = LocalStore::derive_storage_key(&[1u8; 32]);
+        let store = LocalStore::open(tmp.path(), storage_key).unwrap();
+
+        store.store_setting("theme", "dark").unwrap();
+        store.store_setting("relay_addr", "127.0.0.1:4433").unwrap();
+
+        assert_eq!(store.get_setting("theme").unwrap(), Some("dark".into()));
+        assert_eq!(
+            store.get_setting("relay_addr").unwrap(),
+            Some("127.0.0.1:4433".into())
+        );
+        assert_eq!(store.get_setting("nonexistent").unwrap(), None);
+    }
+
+    #[test]
+    fn latest_message_id_by_tag() {
+        let tmp = NamedTempFile::new().unwrap();
+        let storage_key = LocalStore::derive_storage_key(&[1u8; 32]);
+        let store = LocalStore::open(tmp.path(), storage_key).unwrap();
+
+        let tag = [1u8; 32];
+        for i in 0..3u8 {
+            let msg = SealedMessage {
+                id: MessageId([i; 32]),
+                routing_tag: tag,
+                ciphertext: vec![i],
+                signature: vec![i],
+                key_generation: 0,
+                sent_at: (i as i64) * 100,
+            };
+            store.store_message(&msg).unwrap();
+        }
+
+        let latest = store.latest_message_id_by_tag(&tag).unwrap().unwrap();
+        assert_eq!(latest, MessageId([2u8; 32]));
+
+        // Non-existent tag
+        let none = store.latest_message_id_by_tag(&[99u8; 32]).unwrap();
+        assert!(none.is_none());
     }
 }

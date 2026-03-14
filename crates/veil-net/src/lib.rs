@@ -8,7 +8,7 @@ pub mod relay_client;
 pub use discovery::{Discovery, DiscoveryEvent};
 pub use manager::{ConnectionId, PeerEvent, PeerManager};
 pub use peer::{PeerConnection, create_endpoint};
-pub use protocol::WireMessage;
+pub use protocol::{PresenceKind, WireMessage};
 pub use relay_client::{RelayClient, RelayCommand, RelayEvent};
 
 #[derive(Debug, thiserror::Error)]

@@ -35,6 +35,7 @@ async fn two_peers_connect_and_exchange_messages() {
         id2_bytes,
         event_tx2,
         connections2,
+        None,
     ));
 
     // pm1 connects to pm2 (includes challenge-response + DH key exchange)
@@ -131,6 +132,7 @@ async fn challenge_response_rejects_wrong_identity() {
         id2_bytes,
         event_tx2,
         connections2,
+        None,
     ));
 
     // The connect should fail because the responder signs with id2's key

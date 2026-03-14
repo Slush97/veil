@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use veil_crypto::{GroupKey, Identity, PeerId};
+use veil_crypto::{DeviceCertificate, GroupKey, GroupKeyRing, Identity, PeerId};
+
+use crate::control::ControlMessage;
 
 /// Unique identifier for a message (content-addressed).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -42,6 +44,8 @@ pub enum MessageKind {
         filename: String,
         size_bytes: u64,
         ciphertext_len: u64,
+        /// For small files (< 1 MiB): encrypted data inline. For large files: None (fetch via blob protocol).
+        inline_data: Option<Vec<u8>>,
     },
     Reply {
         parent_id: MessageId,
@@ -51,6 +55,17 @@ pub enum MessageKind {
         target_id: MessageId,
         emoji: String,
     },
+    /// Edit a previously sent message. Only the original sender can edit.
+    Edit {
+        target_id: MessageId,
+        new_text: String,
+    },
+    /// Delete a previously sent message. Only the original sender can delete.
+    Delete {
+        target_id: MessageId,
+    },
+    /// A control message for group state changes (key rotation, membership, etc.).
+    Control(ControlMessage),
 }
 
 /// Derive an opaque routing tag from a group ID.
@@ -134,6 +149,63 @@ impl SealedMessage {
             .iter()
             .find(|peer| peer.verify(&sig_payload, &self.signature))
             .cloned();
+
+        let sender = sender.ok_or(SealedMessageError::InvalidSignature)?;
+
+        // Decrypt
+        let plaintext = group_key
+            .decrypt(&self.ciphertext)
+            .map_err(|_| SealedMessageError::DecryptionFailed)?;
+
+        let content: MessageContent = bincode::deserialize(&plaintext)
+            .map_err(|_| SealedMessageError::DeserializationFailed)?;
+
+        Ok((content, sender))
+    }
+
+    /// Verify and decrypt using a keyring (tries multiple key generations).
+    ///
+    /// This is the preferred method — it handles key transitions gracefully.
+    /// `known_members` can be either master PeerIds or legacy direct PeerIds.
+    /// `device_certs` maps device PeerIds to their certificates for chain verification.
+    pub fn verify_and_open_with_keyring(
+        &self,
+        keyring: &GroupKeyRing,
+        known_members: &[PeerId],
+        device_certs: &[DeviceCertificate],
+    ) -> Result<(MessageContent, PeerId), SealedMessageError> {
+        // Find a key matching this message's generation
+        let group_key = keyring
+            .key_for_generation(self.key_generation)
+            .ok_or(SealedMessageError::KeyGenerationMismatch)?;
+
+        // Build signature payload
+        let sig_payload = Self::signature_payload(
+            &self.id,
+            &self.routing_tag,
+            &self.ciphertext,
+            self.key_generation,
+            self.sent_at,
+        );
+
+        // Try direct match against known members (legacy / master key signing)
+        let mut sender: Option<PeerId> = known_members
+            .iter()
+            .find(|peer| peer.verify(&sig_payload, &self.signature))
+            .cloned();
+
+        // If no direct match, try device certificate chain verification
+        if sender.is_none() {
+            for cert in device_certs {
+                if let Some(master_id) = cert.verify_message(&sig_payload, &self.signature) {
+                    // Verify the master is a known member
+                    if known_members.iter().any(|m| *m == master_id) {
+                        sender = Some(master_id);
+                        break;
+                    }
+                }
+            }
+        }
 
         let sender = sender.ok_or(SealedMessageError::InvalidSignature)?;
 
