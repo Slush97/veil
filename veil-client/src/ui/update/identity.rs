@@ -63,11 +63,9 @@ impl App {
                 ConnectionState::Failed(format!("Failed to save identity: {e}"));
         }
 
-        // Save username if provided
-        let username = self.username_input.trim().to_lowercase();
-        if !username.is_empty() {
-            self.username = Some(username.clone());
-        }
+        // Don't set self.username here — it gets set when registration
+        // succeeds on the relay (in update_register_result). Keeping it None
+        // allows update_relay_connected to trigger the registration.
 
         // Zeroize passphrase after use
         self.passphrase_input.zeroize();
