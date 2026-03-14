@@ -152,9 +152,16 @@ impl App {
     }
 
     /// Build the list of known master PeerIds for message verification.
+    /// Includes: self, P2P-connected peers, and directory contacts.
     pub(crate) fn known_master_ids(&self) -> Vec<PeerId> {
         let mut ids = vec![self.master_peer_id()];
         ids.extend(self.connected_peers.iter().map(|(_, pid)| pid.clone()));
+        // Add contacts — their public keys are master verifying keys from the directory
+        for (_, public_key) in &self.contacts {
+            ids.push(PeerId {
+                verifying_key: public_key.to_vec(),
+            });
+        }
         ids
     }
 
@@ -213,6 +220,7 @@ impl App {
         content: &veil_core::MessageContent,
     ) -> Option<SealedMessage> {
         let device = self.device.as_ref()?;
+        let master = self.master.as_ref()?;
         let group = self.current_group.as_ref()?;
         let ring = match group.key_ring.lock() {
             Ok(r) => r,
@@ -221,7 +229,18 @@ impl App {
                 return None;
             }
         };
-        let sealed = match SealedMessage::seal(content, ring.current(), &group.id.0, device.identity()) {
+        // DM groups (name starts with @) use master identity for signing so the
+        // recipient can verify against the directory public key without needing
+        // a device certificate exchange. Regular groups use device identity.
+        let is_dm = group.name.starts_with('@');
+        let signing_identity: veil_crypto::Identity;
+        let identity_ref = if is_dm {
+            signing_identity = veil_crypto::Identity::from_bytes(&master.to_bytes());
+            &signing_identity
+        } else {
+            device.identity()
+        };
+        let sealed = match SealedMessage::seal(content, ring.current(), &group.id.0, identity_ref) {
             Ok(s) => s,
             Err(e) => {
                 drop(ring);
