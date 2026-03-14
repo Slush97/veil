@@ -1,13 +1,15 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use quinn::Endpoint;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
 
+use crate::mailbox::MailboxStore;
 use crate::protocol::*;
 
 /// Relay configuration — sensible defaults for low-resource devices.
@@ -24,6 +26,10 @@ pub struct RelayConfig {
     pub max_connections: usize,
     /// Max forward messages per second per client.
     pub max_forwards_per_second: u32,
+    /// Path for the persistent mailbox database.
+    pub db_path: PathBuf,
+    /// Max age for mailbox messages before purging.
+    pub max_age: Duration,
 }
 
 impl Default for RelayConfig {
@@ -35,6 +41,8 @@ impl Default for RelayConfig {
             max_mailbox_total: 50_000,
             max_connections: 1024,
             max_forwards_per_second: 50,
+            db_path: PathBuf::from("./mailbox.redb"),
+            max_age: Duration::from_secs(86400),
         }
     }
 }
@@ -56,27 +64,30 @@ struct ClientState {
 }
 
 struct RelayState {
-    config: RelayConfig,
+    config_max_tags_per_client: usize,
+    config_max_forwards_per_second: u32,
     /// Connected clients.
     clients: HashMap<ClientId, ClientState>,
     /// Routing tag → set of subscribed client IDs.
     tag_subscribers: HashMap<[u8; 32], HashSet<ClientId>>,
-    /// Routing tag → queued messages for offline subscribers.
-    mailboxes: HashMap<[u8; 32], VecDeque<ForwardEnvelope>>,
-    /// Total messages across all mailboxes.
-    mailbox_total: usize,
+    /// Persistent mailbox store.
+    mailbox_store: Arc<MailboxStore>,
     /// Next client ID.
     next_id: ClientId,
 }
 
 impl RelayState {
-    fn new(config: RelayConfig) -> Self {
+    fn new(
+        max_tags_per_client: usize,
+        max_forwards_per_second: u32,
+        mailbox_store: Arc<MailboxStore>,
+    ) -> Self {
         Self {
-            config,
+            config_max_tags_per_client: max_tags_per_client,
+            config_max_forwards_per_second: max_forwards_per_second,
             clients: HashMap::new(),
             tag_subscribers: HashMap::new(),
-            mailboxes: HashMap::new(),
-            mailbox_total: 0,
+            mailbox_store,
             next_id: 0,
         }
     }
@@ -91,7 +102,7 @@ impl RelayState {
                 subscribed_tags: HashSet::new(),
                 tx,
                 last_replenish: Instant::now(),
-                forward_tokens: self.config.max_forwards_per_second,
+                forward_tokens: self.config_max_forwards_per_second,
             },
         );
         id
@@ -112,7 +123,7 @@ impl RelayState {
 
     fn subscribe(&mut self, client_id: ClientId, tags: &[[u8; 32]]) -> Result<(), StatusCode> {
         let client = self.clients.get_mut(&client_id).unwrap();
-        if client.subscribed_tags.len() + tags.len() > self.config.max_tags_per_client {
+        if client.subscribed_tags.len() + tags.len() > self.config_max_tags_per_client {
             return Err(StatusCode::TagLimitExceeded);
         }
         for tag in tags {
@@ -142,7 +153,7 @@ impl RelayState {
     /// Check and consume a forward token for rate limiting.
     /// Returns true if the forward is allowed.
     fn check_rate_limit(&mut self, client_id: ClientId) -> bool {
-        let max_tokens = self.config.max_forwards_per_second;
+        let max_tokens = self.config_max_forwards_per_second;
         let client = match self.clients.get_mut(&client_id) {
             Some(c) => c,
             None => return false,
@@ -185,19 +196,14 @@ impl RelayState {
             }
         }
 
-        // Queue in mailbox for subscribers who aren't currently connected
-        // but have subscribed in the past (we keep the tag entry).
-        // For now, only queue if there are known subscribers.
-        if self.mailbox_total < self.config.max_mailbox_total {
-            let mailbox = self.mailboxes.entry(routing_tag).or_default();
-            if mailbox.len() < self.config.max_mailbox_per_tag {
-                mailbox.push_back(ForwardEnvelope {
-                    routing_tag,
-                    payload,
-                    received_at: chrono_timestamp(),
-                });
-                self.mailbox_total += 1;
-            }
+        // Queue in persistent mailbox
+        let envelope = ForwardEnvelope {
+            routing_tag,
+            payload,
+            received_at: chrono_timestamp(),
+        };
+        if let Err(e) = self.mailbox_store.push(&envelope) {
+            warn!("failed to persist mailbox message: {e}");
         }
 
         targets
@@ -210,27 +216,13 @@ impl RelayState {
             None => return (vec![], 0),
         };
 
-        let mut batch = Vec::new();
-        let mut remaining = 0u64;
-        const BATCH_SIZE: usize = 100;
-
-        for tag in &tags {
-            if let Some(mailbox) = self.mailboxes.get_mut(tag) {
-                let drain_count = mailbox.len().min(BATCH_SIZE.saturating_sub(batch.len()));
-                for _ in 0..drain_count {
-                    if let Some(msg) = mailbox.pop_front() {
-                        batch.push(msg);
-                        self.mailbox_total -= 1;
-                    }
-                }
-                remaining += mailbox.len() as u64;
-                if batch.len() >= BATCH_SIZE {
-                    break;
-                }
+        match self.mailbox_store.drain(&tags, 100) {
+            Ok((batch, remaining)) => (batch, remaining),
+            Err(e) => {
+                warn!("failed to drain mailbox: {e}");
+                (vec![], 0)
             }
         }
-
-        (batch, remaining)
     }
 }
 
@@ -265,15 +257,35 @@ fn verify_subscribe_signature(
 
 pub struct RelayServer {
     state: Arc<RwLock<RelayState>>,
+    mailbox_store: Arc<MailboxStore>,
     config_bind_addr: SocketAddr,
+    #[allow(dead_code)]
+    config_max_age: Duration,
 }
 
 impl RelayServer {
     pub fn new(config: RelayConfig) -> Self {
+        let mailbox_store = Arc::new(
+            MailboxStore::open(
+                &config.db_path,
+                config.max_mailbox_per_tag,
+                config.max_mailbox_total,
+                config.max_age,
+            )
+            .expect("failed to open mailbox database"),
+        );
+
         let bind_addr = config.bind_addr;
+        let max_age = config.max_age;
         Self {
-            state: Arc::new(RwLock::new(RelayState::new(config))),
+            state: Arc::new(RwLock::new(RelayState::new(
+                config.max_tags_per_client,
+                config.max_forwards_per_second,
+                mailbox_store.clone(),
+            ))),
+            mailbox_store,
             config_bind_addr: bind_addr,
+            config_max_age: max_age,
         }
     }
 
@@ -281,6 +293,21 @@ impl RelayServer {
         let endpoint = create_relay_endpoint(self.config_bind_addr)?;
         let local_addr = endpoint.local_addr()?;
         info!("veil-relay listening on {local_addr}");
+
+        // Spawn TTL cleanup task — purge expired messages every 5 minutes
+        let mailbox = self.mailbox_store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                match mailbox.purge_expired() {
+                    Ok(0) => {}
+                    Ok(n) => info!("TTL cleanup: purged {n} expired messages"),
+                    Err(e) => warn!("TTL cleanup error: {e}"),
+                }
+            }
+        });
 
         loop {
             let incoming = match endpoint.accept().await {

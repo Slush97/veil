@@ -19,5 +19,11 @@ COPY --from=builder /build/target/release/veil-relay /veil-relay
 # QUIC/UDP port
 EXPOSE 4433/udp
 
+# Persistent mailbox storage
+VOLUME /var/lib/veil-relay
+
+ENV VEIL_RELAY_DB_PATH=/var/lib/veil-relay/mailbox.redb
+ENV VEIL_RELAY_MAX_AGE_SECS=86400
+
 ENTRYPOINT ["/veil-relay"]
 CMD ["0.0.0.0:4433"]

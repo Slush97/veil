@@ -24,6 +24,10 @@ pub enum RelayEvent {
         messages: Vec<ForwardEnvelope>,
         remaining: u64,
     },
+    Error {
+        code: String,
+        message: String,
+    },
 }
 
 /// Commands sent to the relay client from the application.
@@ -291,7 +295,20 @@ async fn connect_and_run(
                             let _ = event_tx.send(RelayEvent::MailboxDrained { messages, remaining }).await;
                         }
                         RelayMessage::Pong(_) => {}
-                        RelayMessage::Status { .. } => {}
+                        RelayMessage::Status { code, message } => {
+                            match code {
+                                veil_relay::protocol::StatusCode::Ok => {}
+                                veil_relay::protocol::StatusCode::RateLimited
+                                | veil_relay::protocol::StatusCode::MailboxFull
+                                | veil_relay::protocol::StatusCode::TagLimitExceeded
+                                | veil_relay::protocol::StatusCode::BadVersion => {
+                                    let _ = event_tx.send(RelayEvent::Error {
+                                        code: format!("{code:?}"),
+                                        message,
+                                    }).await;
+                                }
+                            }
+                        }
                         _ => {}
                     },
                     Err(e) => {

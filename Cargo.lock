@@ -4860,13 +4860,16 @@ name = "veil-relay"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "chrono",
  "ed25519-dalek",
  "hex",
  "quinn",
  "rand 0.8.5",
  "rcgen",
+ "redb",
  "rustls",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

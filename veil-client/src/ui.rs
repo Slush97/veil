@@ -33,6 +33,54 @@ enum MessageStatus {
     Delivered,
 }
 
+/// Structured connection state for clearer UI feedback.
+#[derive(Clone, Debug, PartialEq)]
+enum ConnectionState {
+    Disconnected,
+    Connecting(String),
+    Connected(String),
+    Reconnecting,
+    Warning(String),
+    Failed(String),
+}
+
+impl Default for ConnectionState {
+    fn default() -> Self {
+        Self::Disconnected
+    }
+}
+
+impl std::fmt::Display for ConnectionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disconnected => write!(f, "Disconnected"),
+            Self::Connecting(msg) => write!(f, "{msg}"),
+            Self::Connected(msg) => write!(f, "{msg}"),
+            Self::Reconnecting => write!(f, "Reconnecting..."),
+            Self::Warning(msg) => write!(f, "{msg}"),
+            Self::Failed(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+/// Status of a file attachment in a chat message.
+#[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)]
+enum FileStatus {
+    Available,
+    Downloading,
+    Unavailable,
+}
+
+/// File attachment metadata.
+#[derive(Clone, Debug)]
+struct FileInfo {
+    blob_id: veil_core::BlobId,
+    filename: String,
+    size_str: String,
+    status: FileStatus,
+}
+
 pub struct App {
     master: Option<MasterIdentity>,
     device: Option<DeviceIdentity>,
@@ -48,7 +96,7 @@ pub struct App {
     channels: Vec<String>,
     // Connection state
     connect_input: String,
-    connection_status: String,
+    connection_state: ConnectionState,
     // Network state
     net_cmd_tx: Option<futures::channel::mpsc::Sender<NetCommand>>,
     connected_peers: Vec<(ConnectionId, PeerId)>,
@@ -121,6 +169,7 @@ struct ChatMessage {
     reply_to_content: Option<String>,
     reply_to_sender: Option<String>,
     channel_id: Option<ChannelId>,
+    file_info: Option<FileInfo>,
 }
 
 impl ChatMessage {
@@ -143,6 +192,7 @@ impl ChatMessage {
             reply_to_content: None,
             reply_to_sender: None,
             channel_id: None,
+            file_info: None,
         }
     }
 
@@ -172,6 +222,7 @@ impl ChatMessage {
             reply_to_content: None,
             reply_to_sender: None,
             channel_id: None,
+            file_info: None,
         }
     }
 }
@@ -216,6 +267,10 @@ pub enum NetCommand {
         conn_id: ConnectionId,
         blob_id: veil_core::BlobId,
         data: Vec<u8>,
+    },
+    /// Request a full blob from peers.
+    RequestBlob {
+        blob_id: veil_core::BlobId,
     },
 }
 
@@ -300,6 +355,15 @@ pub enum Message {
         conn_id: ConnectionId,
         blob_id: veil_core::BlobId,
     },
+    BlobReceived {
+        blob_id: veil_core::BlobId,
+    },
+    SaveFile(veil_core::BlobId, String),
+    // Relay errors
+    RelayError {
+        code: String,
+        message: String,
+    },
     // Phase 2: Display names
     DisplayNameInputChanged(String),
     SetDisplayName,
@@ -343,7 +407,7 @@ impl Default for App {
             current_channel: None,
             channels: Vec::new(),
             connect_input: String::new(),
-            connection_status: String::new(),
+            connection_state: ConnectionState::Disconnected,
             net_cmd_tx: None,
             connected_peers: Vec::new(),
             local_addr: None,
@@ -380,6 +444,9 @@ impl Default for App {
 }
 
 fn veil_data_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("VEIL_DATA_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
     dirs::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("veil")
@@ -532,6 +599,16 @@ fn network_worker(
                                         .send(Message::BlobRequested { conn_id, blob_id })
                                         .await;
                                 }
+                                WireMessage::BlobFull { blob_id, data } => {
+                                    if let Some(ref store) = blob_store {
+                                        if let Err(e) = store.store_blob_full(&blob_id, &data) {
+                                            tracing::warn!("failed to store received blob: {e}");
+                                        }
+                                    }
+                                    let _ = output
+                                        .send(Message::BlobReceived { blob_id })
+                                        .await;
+                                }
                                 WireMessage::BlobShard(shard) => {
                                     if let Some(ref store) = blob_store {
                                         let _ = store.store_blob_shard(&shard);
@@ -587,6 +664,9 @@ fn network_worker(
                                         .await;
                                 }
                             }
+                        }
+                        Some(RelayEvent::Error { code, message }) => {
+                            let _ = output.send(Message::RelayError { code, message }).await;
                         }
                         Some(RelayEvent::MailboxDrained { messages, .. }) => {
                             for envelope in messages {
@@ -770,7 +850,9 @@ fn network_worker(
                                                         let _ = rc.forward_message(sealed.routing_tag, payload).await;
                                                     }
                                                 }
-                                                let _ = store.store_message(&sealed);
+                                                if let Err(e) = store.store_message(&sealed) {
+                                        tracing::warn!("failed to persist message: {e}");
+                                    }
                                                 let _ = output.send(Message::FileSent { filename }).await;
                                             }
                                             Err(e) => {
@@ -827,7 +909,9 @@ fn network_worker(
                                                         let _ = rc.forward_message(sealed.routing_tag, payload).await;
                                                     }
                                                 }
-                                                let _ = store.store_message(&sealed);
+                                                if let Err(e) = store.store_message(&sealed) {
+                                        tracing::warn!("failed to persist message: {e}");
+                                    }
                                                 let _ = output.send(Message::FileSent { filename }).await;
                                             }
                                             Err(e) => {
@@ -843,6 +927,10 @@ fn network_worker(
                         }
                         Some(NetCommand::SendPresence(wire_msg)) => {
                             manager.broadcast(&wire_msg).await;
+                        }
+                        Some(NetCommand::RequestBlob { blob_id }) => {
+                            // Broadcast BlobFullRequest to all peers
+                            manager.broadcast(&WireMessage::BlobFullRequest { blob_id }).await;
                         }
                         Some(NetCommand::BlobResponse { conn_id, blob_id, data }) => {
                             let _ = manager.send_to(
@@ -887,7 +975,9 @@ impl App {
             return Subscription::none();
         }
 
-        let device = self.device.as_ref().unwrap();
+        let Some(device) = self.device.as_ref() else {
+            return Subscription::none();
+        };
         let peer_id = device.device_peer_id();
         let identity_bytes = device.device_key_bytes();
         let device_cert = Some(device.certificate().clone());
@@ -900,7 +990,10 @@ impl App {
     }
 
     fn setup_after_identity(&mut self) {
-        let master = self.master.as_ref().unwrap();
+        let Some(master) = self.master.as_ref() else {
+            tracing::error!("setup_after_identity called without master identity");
+            return;
+        };
 
         // Open message store — derive from master key bytes
         let data_dir = veil_data_dir();
@@ -1038,7 +1131,13 @@ impl App {
         match store.list_messages_by_tag(&routing_tag, limit, 0) {
             Ok(sealed_messages) => {
                 let members = self.known_master_ids();
-                let ring = group.key_ring.lock().unwrap();
+                let ring = match group.key_ring.lock() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!("key ring lock poisoned: {e}");
+                        return;
+                    }
+                };
 
                 for sealed in &sealed_messages {
                     if let Ok((content, sender)) =
@@ -1123,7 +1222,10 @@ impl App {
                     veil_crypto::EpochReason::ScheduledRotation => {
                         // All members derive the new key independently
                         if let Some(ref group) = self.current_group {
-                            let mut ring = group.key_ring.lock().unwrap();
+                            let Ok(mut ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            return;
+                        };
                             ring.rotate_forward(sender.verifying_key.clone());
 
                             if let Some(ref store) = self.store {
@@ -1147,7 +1249,10 @@ impl App {
                                     eph,
                                     &peer_pub,
                                 ) {
-                                    let mut ring = group.key_ring.lock().unwrap();
+                                    let Ok(mut ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            return;
+                        };
                                     ring.apply_eviction(new_key, epoch.clone());
 
                                     if let Some(ref store) = self.store {
@@ -1276,8 +1381,9 @@ impl App {
                 std::fs::create_dir_all(&data_dir).ok();
                 let keystore = data_dir.join("identity.veil");
 
-                let master = self.master.as_ref().unwrap();
-                let device = self.device.as_ref().unwrap();
+                let (Some(master), Some(device)) = (self.master.as_ref(), self.device.as_ref()) else {
+                    return;
+                };
 
                 if let Err(e) = veil_crypto::save_device_identity(
                     master.entropy(),
@@ -1285,7 +1391,7 @@ impl App {
                     self.passphrase_input.as_bytes(),
                     &keystore,
                 ) {
-                    self.connection_status = format!("Failed to save identity: {e}");
+                    self.connection_state = ConnectionState::Failed(format!("Failed to save identity: {e}"));
                 }
 
                 // Zeroize passphrase after use
@@ -1331,7 +1437,7 @@ impl App {
                             }
                             Err(e) => {
                                 self.passphrase_input.zeroize();
-                                self.connection_status = format!("Failed to load: {e}");
+                                self.connection_state = ConnectionState::Failed(format!("Failed to load: {e}"));
                             }
                         }
                     }
@@ -1361,7 +1467,7 @@ impl App {
             }
             Message::Send => {
                 if !self.message_input.trim().is_empty() {
-                    let device = self.device.as_ref().unwrap();
+                    let Some(device) = self.device.as_ref() else { return };
                     let fingerprint = self.resolve_display_name(&self.master_peer_id());
 
                     if let Some(ref group) = self.current_group {
@@ -1392,7 +1498,10 @@ impl App {
                             channel_id: channel_id.clone(),
                         };
 
-                        let ring = group.key_ring.lock().unwrap();
+                        let Ok(ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            return;
+                        };
                         match SealedMessage::seal(
                             &content,
                             ring.current(),
@@ -1414,6 +1523,7 @@ impl App {
                                     reply_to_content: None,
                                     reply_to_sender: None,
                                     channel_id: Some(channel_id),
+                                    file_info: None,
                                 };
 
                                 // If this was a reply, attach context
@@ -1451,7 +1561,9 @@ impl App {
 
                                 // Persist
                                 if let Some(ref store) = self.store {
-                                    let _ = store.store_message(&sealed);
+                                    if let Err(e) = store.store_message(&sealed) {
+                                        tracing::warn!("failed to persist message: {e}");
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -1482,12 +1594,12 @@ impl App {
             }
             Message::ConnectToPeer => {
                 if let Ok(addr) = self.connect_input.parse::<SocketAddr>() {
-                    self.connection_status = format!("Connecting to {addr}...");
+                    self.connection_state = ConnectionState::Connecting(format!("Connecting to {addr}..."));
                     if let Some(ref mut tx) = self.net_cmd_tx {
                         let _ = tx.try_send(NetCommand::Connect(addr));
                     }
                 } else {
-                    self.connection_status = "Invalid address (use host:port)".into();
+                    self.connection_state = ConnectionState::Failed("Invalid address (use host:port)".into());
                 }
                 self.connect_input.clear();
             }
@@ -1497,7 +1609,7 @@ impl App {
             } => {
                 self.local_addr = Some(local_addr);
                 self.net_cmd_tx = Some(cmd_tx);
-                self.connection_status = format!("Listening on {local_addr}");
+                self.connection_state = ConnectionState::Connected(format!("Listening on {local_addr}"));
 
                 // Flush pending messages
                 let pending: Vec<SealedMessage> = self.pending_messages.drain(..).collect();
@@ -1571,12 +1683,12 @@ impl App {
 
                 self.connected_peers
                     .push((conn_id, peer_id.clone()));
-                self.connection_status =
-                    format!("Connected to {}", peer_id.fingerprint());
+                self.connection_state =
+                    ConnectionState::Connected(format!("Connected to {}", peer_id.fingerprint()));
             }
             Message::PeerDisconnected { conn_id } => {
                 self.connected_peers.retain(|(id, _)| *id != conn_id);
-                self.connection_status = "Peer disconnected".into();
+                self.connection_state = ConnectionState::Disconnected;
             }
             Message::PeerData { sealed, .. } => {
                 // Try all groups to find the one that can decrypt
@@ -1584,7 +1696,10 @@ impl App {
                 let members = self.known_master_ids();
 
                 for group in &self.groups {
-                    let ring = group.key_ring.lock().unwrap();
+                    let Ok(ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            continue;
+                        };
                     if let Ok((content, sender)) = sealed.verify_and_open_with_keyring(
                         &ring,
                         &members,
@@ -1684,18 +1799,18 @@ impl App {
                                     format!("{:.1} MB", size_bytes as f64 / 1_048_576.0)
                                 };
 
-                                if inline_data.is_some() {
+                                let file_status = if inline_data.is_some() {
                                     // Small file — data is right here
-                                    // Store the full blob locally for future access
                                     if let (Some(data), Some(store)) =
                                         (inline_data, &self.store)
                                     {
-                                        let _ = store.store_blob_full(blob_id, data);
+                                        if let Err(e) = store.store_blob_full(blob_id, data) {
+                                            tracing::warn!("failed to store inline blob: {e}");
+                                        }
                                     }
-                                    self.messages.push(ChatMessage::user(sealed.id.clone(), sender.clone(), format!("[file: {filename} ({size_str})]"), content.timestamp));
+                                    FileStatus::Available
                                 } else {
                                     // Large file — need to fetch blob
-                                    // Check if we already have it locally
                                     let have_blob = self
                                         .store
                                         .as_ref()
@@ -1704,13 +1819,12 @@ impl App {
                                         .is_some();
 
                                     if have_blob {
-                                        self.messages.push(ChatMessage::user(sealed.id.clone(), sender.clone(), format!("[file: {filename} ({size_str})]"), content.timestamp));
+                                        FileStatus::Available
                                     } else {
                                         // Try to reconstruct from shards
                                         let reconstructed = self.store.as_ref().and_then(|store| {
                                             let shards = store.list_blob_shards(blob_id).ok()?;
                                             if shards.len() >= veil_store::blob::DATA_SHARDS {
-                                                // We have enough shards
                                                 let shard_opts: Vec<Option<veil_store::BlobShard>> =
                                                     (0..veil_store::blob::TOTAL_SHARDS)
                                                         .map(|i| {
@@ -1720,15 +1834,15 @@ impl App {
                                                                 .cloned()
                                                         })
                                                         .collect();
-                                                // Try any group key to decrypt
                                                 for group in &self.groups {
-                                                    let ring = group.key_ring.lock().unwrap();
-                                                    if let Ok(data) = veil_store::decode_blob(
-                                                        &shard_opts,
-                                                        ciphertext_len as usize,
-                                                        ring.current(),
-                                                    ) {
-                                                        return Some(data);
+                                                    if let Ok(ring) = group.key_ring.lock() {
+                                                        if let Ok(data) = veil_store::decode_blob(
+                                                            &shard_opts,
+                                                            ciphertext_len as usize,
+                                                            ring.current(),
+                                                        ) {
+                                                            return Some(data);
+                                                        }
                                                     }
                                                 }
                                                 None
@@ -1738,26 +1852,32 @@ impl App {
                                         });
 
                                         if reconstructed.is_some() {
-                                            self.messages.push(ChatMessage::user(sealed.id.clone(), sender.clone(), format!(
-                                                "[file: {filename} ({size_str}) - reconstructed from shards]"
-                                            ), content.timestamp));
+                                            FileStatus::Available
                                         } else {
-                                            // Request full blob from the sender as fallback
+                                            // Request full blob from peers via BlobFullRequest
                                             if let Some(ref mut tx) = self.net_cmd_tx {
-                                                // Broadcast the request — sender will respond
-                                                let _ = tx.try_send(NetCommand::SendMessage(
-                                                    // We re-use the sealed message mechanism to avoid
-                                                    // needing a new command — instead we handle BlobFullRequest
-                                                    // at the wire level
-                                                    sealed.clone(),
-                                                ));
+                                                let _ = tx.try_send(NetCommand::RequestBlob {
+                                                    blob_id: blob_id.clone(),
+                                                });
                                             }
-                                            self.messages.push(ChatMessage::user(sealed.id.clone(), sender.clone(), format!(
-                                                "[file: {filename} ({size_str}) - requesting...]"
-                                            ), content.timestamp));
+                                            FileStatus::Downloading
                                         }
                                     }
-                                }
+                                };
+
+                                let mut cm = ChatMessage::user(
+                                    sealed.id.clone(),
+                                    sender.clone(),
+                                    format!("[file: {filename} ({size_str})]"),
+                                    content.timestamp,
+                                );
+                                cm.file_info = Some(FileInfo {
+                                    blob_id: blob_id.clone(),
+                                    filename: filename.clone(),
+                                    size_str: size_str.clone(),
+                                    status: file_status,
+                                });
+                                self.messages.push(cm);
                             }
                             _ => {
                                 // Image, Video, etc. — display placeholder
@@ -1775,16 +1895,18 @@ impl App {
 
                 // Persist incoming message
                 if let Some(ref store) = self.store {
-                    let _ = store.store_message(&sealed);
+                    if let Err(e) = store.store_message(&sealed) {
+                                        tracing::warn!("failed to persist message: {e}");
+                                    }
                 }
             }
             Message::ConnectionFailed(err) => {
-                self.connection_status = format!("Error: {err}");
+                self.connection_state = ConnectionState::Failed(format!("Error: {err}"));
             }
             // Relay events
             Message::RelayConnected => {
                 self.relay_connected = true;
-                self.connection_status = "Relay connected".into();
+                self.connection_state = ConnectionState::Connected("Relay connected".into());
 
                 // Flush pending messages on relay connect
                 let pending: Vec<SealedMessage> = self.pending_messages.drain(..).collect();
@@ -1799,9 +1921,17 @@ impl App {
                     }
                 }
             }
-            Message::RelayDisconnected(reason) => {
+            Message::RelayDisconnected(_reason) => {
                 self.relay_connected = false;
-                self.connection_status = format!("Relay disconnected: {reason}");
+                self.connection_state = ConnectionState::Reconnecting;
+            }
+            Message::RelayError { code, message } => {
+                self.connection_state = ConnectionState::Warning(
+                    format!("Relay: {code} — {message}")
+                );
+                self.messages.push(ChatMessage::system(
+                    format!("Relay warning: [{code}] {message}")
+                ));
             }
             // Relay UI
             Message::RelayAddrChanged(value) => {
@@ -1809,7 +1939,7 @@ impl App {
             }
             Message::ConnectToRelay => {
                 if let Ok(addr) = self.relay_addr_input.parse::<SocketAddr>() {
-                    self.connection_status = format!("Connecting to relay {addr}...");
+                    self.connection_state = ConnectionState::Connecting(format!("Connecting to relay {addr}..."));
                     if let Some(ref mut tx) = self.net_cmd_tx {
                         let _ = tx.try_send(NetCommand::ConnectRelay(addr));
                     }
@@ -1818,7 +1948,7 @@ impl App {
                         let _ = store.store_setting("relay_addr", &self.relay_addr_input);
                     }
                 } else {
-                    self.connection_status = "Invalid relay address (use host:port)".into();
+                    self.connection_state = ConnectionState::Failed("Invalid relay address (use host:port)".into());
                 }
             }
             // Invite UI
@@ -1832,7 +1962,10 @@ impl App {
                     } else {
                         self.relay_addr_input.clone()
                     };
-                    let ring = group.key_ring.lock().unwrap();
+                    let Ok(ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            return;
+                        };
                     let current_key = Arc::new(ring.current().duplicate());
                     drop(ring);
                     if let Some(ref mut tx) = self.net_cmd_tx {
@@ -1883,7 +2016,10 @@ impl App {
 
                 // Persist the new group as v2
                 if let Some(ref store) = self.store {
-                    let ring = group_state.key_ring.lock().unwrap();
+                    let Ok(ring) = group_state.key_ring.lock() else {
+                        tracing::error!("key ring lock poisoned");
+                        return;
+                    };
                     let _ = store.store_group_v2(
                         &group_state.id.0,
                         &group_state.name,
@@ -1894,10 +2030,10 @@ impl App {
                 self.groups.push(group_state.clone());
                 self.current_group = Some(group_state);
                 self.invite_input.clear();
-                self.connection_status = "Invite accepted!".into();
+                self.connection_state = ConnectionState::Connected("Invite accepted!".into());
             }
             Message::InviteFailed(err) => {
-                self.connection_status = format!("Invite failed: {err}");
+                self.connection_state = ConnectionState::Failed(format!("Invite failed: {err}"));
             }
             // File handling
             Message::PickFile => {
@@ -1907,8 +2043,11 @@ impl App {
             }
             Message::SendFile(path) => {
                 if let Some(ref group) = self.current_group {
-                    let device = self.device.as_ref().unwrap();
-                    let ring = group.key_ring.lock().unwrap();
+                    let Some(device) = self.device.as_ref() else { return };
+                    let Ok(ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            return;
+                        };
                     let group_key = Arc::new(ring.current().duplicate());
                     drop(ring);
 
@@ -1939,6 +2078,7 @@ impl App {
                     reply_to_content: None,
                     reply_to_sender: None,
                     channel_id: None,
+                    file_info: None,
                 });
             }
             Message::FileFailed(err) => {
@@ -1954,6 +2094,64 @@ impl App {
                                 blob_id,
                                 data,
                             });
+                        }
+                    }
+                }
+            }
+            Message::BlobReceived { blob_id } => {
+                // Find matching file messages and flip status to Available
+                for msg in &mut self.messages {
+                    if let Some(ref mut fi) = msg.file_info {
+                        if fi.blob_id == blob_id && fi.status == FileStatus::Downloading {
+                            fi.status = FileStatus::Available;
+                            msg.content = format!("[file: {} ({})]", fi.filename, fi.size_str);
+                        }
+                    }
+                }
+            }
+            Message::SaveFile(blob_id, filename) => {
+                if let Some(ref store) = self.store {
+                    match store.get_blob_full(&blob_id) {
+                        Ok(Some(encrypted_data)) => {
+                            // Decrypt with group key
+                            let decrypted = self.current_group.as_ref().and_then(|group| {
+                                let ring = group.key_ring.lock().ok()?;
+                                ring.current().decrypt(&encrypted_data).ok()
+                            });
+
+                            match decrypted {
+                                Some(data) => {
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .set_file_name(&filename)
+                                        .save_file()
+                                    {
+                                        if let Err(e) = std::fs::write(&path, &data) {
+                                            self.messages.push(ChatMessage::system(
+                                                format!("Failed to save file: {e}")
+                                            ));
+                                        } else {
+                                            self.messages.push(ChatMessage::system(
+                                                format!("File saved to {}", path.display())
+                                            ));
+                                        }
+                                    }
+                                }
+                                None => {
+                                    self.messages.push(ChatMessage::system(
+                                        "Failed to decrypt file".into()
+                                    ));
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            self.messages.push(ChatMessage::system(
+                                "File data not available".into()
+                            ));
+                        }
+                        Err(e) => {
+                            self.messages.push(ChatMessage::system(
+                                format!("Failed to load file: {e}")
+                            ));
                         }
                     }
                 }
@@ -1980,7 +2178,7 @@ impl App {
                         if let Some(ref msg_id) = msg.id {
                             // Send edit as a new sealed message
                             if let Some(ref group) = self.current_group {
-                                let device = self.device.as_ref().unwrap();
+                                let Some(device) = self.device.as_ref() else { return };
                                 let content = MessageContent {
                                     kind: MessageKind::Edit {
                                         target_id: msg_id.clone(),
@@ -1989,7 +2187,10 @@ impl App {
                                     timestamp: chrono::Utc::now(),
                                     channel_id: ChannelId::new(),
                                 };
-                                let ring = group.key_ring.lock().unwrap();
+                                let Ok(ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            return;
+                        };
                                 if let Ok(sealed) = SealedMessage::seal(
                                     &content,
                                     ring.current(),
@@ -2001,7 +2202,9 @@ impl App {
                                         let _ = tx.try_send(NetCommand::SendMessage(sealed.clone()));
                                     }
                                     if let Some(ref store) = self.store {
-                                        let _ = store.store_message(&sealed);
+                                        if let Err(e) = store.store_message(&sealed) {
+                                        tracing::warn!("failed to persist message: {e}");
+                                    }
                                     }
                                 }
                             }
@@ -2021,7 +2224,7 @@ impl App {
                         if let Some(ref msg_id) = msg.id {
                             // Send delete as a new sealed message
                             if let Some(ref group) = self.current_group {
-                                let device = self.device.as_ref().unwrap();
+                                let Some(device) = self.device.as_ref() else { return };
                                 let content = MessageContent {
                                     kind: MessageKind::Delete {
                                         target_id: msg_id.clone(),
@@ -2029,7 +2232,10 @@ impl App {
                                     timestamp: chrono::Utc::now(),
                                     channel_id: ChannelId::new(),
                                 };
-                                let ring = group.key_ring.lock().unwrap();
+                                let Ok(ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            return;
+                        };
                                 if let Ok(sealed) = SealedMessage::seal(
                                     &content,
                                     ring.current(),
@@ -2041,7 +2247,9 @@ impl App {
                                         let _ = tx.try_send(NetCommand::SendMessage(sealed.clone()));
                                     }
                                     if let Some(ref store) = self.store {
-                                        let _ = store.store_message(&sealed);
+                                        if let Err(e) = store.store_message(&sealed) {
+                                        tracing::warn!("failed to persist message: {e}");
+                                    }
                                     }
                                 }
                             }
@@ -2097,7 +2305,7 @@ impl App {
                     if let Some(ref msg_id) = msg.id {
                         // Send reaction as sealed message
                         if let Some(ref group) = self.current_group {
-                            let device = self.device.as_ref().unwrap();
+                            let Some(device) = self.device.as_ref() else { return };
                             let content = MessageContent {
                                 kind: MessageKind::Reaction {
                                     target_id: msg_id.clone(),
@@ -2106,7 +2314,10 @@ impl App {
                                 timestamp: chrono::Utc::now(),
                                 channel_id: self.current_channel_id(group),
                             };
-                            let ring = group.key_ring.lock().unwrap();
+                            let Ok(ring) = group.key_ring.lock() else {
+                            tracing::error!("key ring lock poisoned");
+                            return;
+                        };
                             if let Ok(sealed) = SealedMessage::seal(
                                 &content,
                                 ring.current(),
@@ -2118,7 +2329,9 @@ impl App {
                                     let _ = tx.try_send(NetCommand::SendMessage(sealed.clone()));
                                 }
                                 if let Some(ref store) = self.store {
-                                    let _ = store.store_message(&sealed);
+                                    if let Err(e) = store.store_message(&sealed) {
+                                        tracing::warn!("failed to persist message: {e}");
+                                    }
                                 }
                             }
                         }
@@ -2155,7 +2368,7 @@ impl App {
                     .collect();
             }
             Message::ConnectDiscoveredPeer(addr) => {
-                self.connection_status = format!("Connecting to LAN peer {addr}...");
+                self.connection_state = ConnectionState::Connecting(format!("Connecting to LAN peer {addr}..."));
                 if let Some(ref mut tx) = self.net_cmd_tx {
                     let _ = tx.try_send(NetCommand::Connect(addr));
                 }
@@ -2221,7 +2434,7 @@ impl App {
             Message::ExportIdentity => {
                 // Show master fingerprint for copy
                 if let Some(ref master) = self.master {
-                    self.connection_status = format!("Fingerprint: {}", master.peer_id().fingerprint());
+                    self.connection_state = ConnectionState::Connected(format!("Fingerprint: {}", master.peer_id().fingerprint()));
                 }
             }
             // Keyboard shortcuts
@@ -2293,7 +2506,7 @@ impl App {
                         .padding(12),
                 ]
                 .spacing(12),
-                text(&self.connection_status).size(12),
+                text(self.connection_state.to_string()).size(12),
             ]
             .spacing(20)
             .align_x(iced::Alignment::Center),
@@ -2440,7 +2653,7 @@ impl App {
                 .on_submit(Message::ConnectToPeer)
                 .padding(4)
                 .width(Length::Fill),
-            text(&self.connection_status).size(10),
+            text(self.connection_state.to_string()).size(10),
         ]
         .spacing(4)
         .padding(8);
@@ -2539,7 +2752,15 @@ impl App {
             .map(|m| self.resolve_display_name(&m.peer_id()))
             .unwrap_or_else(|| "???".into());
 
-        let conn_indicator = if self.relay_connected { " | relay" } else { "" };
+        let relay_indicator = if self.relay_connected { " | relay" } else { "" };
+        let health_indicator = match &self.connection_state {
+            ConnectionState::Connected(_) => "",
+            ConnectionState::Warning(_) => " | [!]",
+            ConnectionState::Reconnecting => " | [reconnecting]",
+            ConnectionState::Failed(_) => " | [error]",
+            ConnectionState::Connecting(_) => " | [connecting]",
+            ConnectionState::Disconnected => "",
+        };
 
         let header = row![
             text(
@@ -2550,7 +2771,7 @@ impl App {
             )
             .size(20),
             horizontal_space(),
-            text(format!("{display_name}  |  {addr_str}{conn_indicator}"))
+            text(format!("{display_name}  |  {addr_str}{relay_indicator}{health_indicator}"))
                 .size(12),
         ]
         .padding(12);
@@ -2650,12 +2871,31 @@ impl App {
             }
 
             // Message content with edit/delete/status indicators
-            let content_text = if msg.deleted {
-                text("[deleted]").size(13)
+            let content_widget: Element<'_, Message> = if let Some(ref fi) = msg.file_info {
+                // Render file attachment widget
+                let status_text = match fi.status {
+                    FileStatus::Available => "Ready",
+                    FileStatus::Downloading => "Downloading...",
+                    FileStatus::Unavailable => "Unavailable",
+                };
+                let mut file_row = row![
+                    text(format!("[{}] {} ({})", status_text, fi.filename, fi.size_str)).size(13),
+                ]
+                .spacing(8);
+                if fi.status == FileStatus::Available {
+                    file_row = file_row.push(
+                        button(text("Save").size(11))
+                            .on_press(Message::SaveFile(fi.blob_id.clone(), fi.filename.clone()))
+                            .padding(4),
+                    );
+                }
+                file_row.into()
+            } else if msg.deleted {
+                text("[deleted]").size(13).into()
             } else if msg.edited {
-                text(format!("{} (edited)", msg.content)).size(13)
+                text(format!("{} (edited)", msg.content)).size(13).into()
             } else {
-                text(&msg.content).size(13)
+                text(&msg.content).size(13).into()
             };
 
             // Send status indicator
@@ -2667,7 +2907,7 @@ impl App {
             };
 
             let mut msg_row = row![
-                msg_col.push(content_text),
+                msg_col.push(content_widget),
                 horizontal_space(),
                 text(format!("{}{status_str}", msg.timestamp)).size(9),
             ]
@@ -2909,7 +3149,7 @@ impl App {
                 ]
                 .spacing(8)
                 .padding(16),
-                text(&self.connection_status).size(10).width(Length::Fill),
+                text(self.connection_state.to_string()).size(10).width(Length::Fill),
             ]
             .spacing(12)
             .width(Length::Fill),

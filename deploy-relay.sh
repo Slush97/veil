@@ -37,6 +37,7 @@ echo "Starting relay on UDP port ${PORT}..."
 docker run -d \
     --restart unless-stopped \
     -p "${PORT}:4433/udp" \
+    -v veil-relay-data:/var/lib/veil-relay \
     --name veil-relay \
     --memory=128m \
     --cpus=0.5 \

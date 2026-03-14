@@ -6,8 +6,10 @@
 //!
 //! Designed to run on anything: Raspberry Pi, phone (Termux), cloud VM, laptop.
 
+pub mod mailbox;
 pub mod protocol;
 pub mod server;
 
+pub use mailbox::MailboxStore;
 pub use protocol::RelayMessage;
 pub use server::{RelayConfig, RelayServer};

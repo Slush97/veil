@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use veil_core::BlobId;
 use veil_crypto::Identity;
 use veil_net::{create_endpoint, PeerEvent, PeerManager, WireMessage};
 
@@ -139,4 +140,98 @@ async fn challenge_response_rejects_wrong_identity() {
     // but claims to be fake_id — the signature verification will fail
     let result = pm1.connect(actual_addr2).await;
     assert!(result.is_err(), "connection should fail with mismatched identity");
+}
+
+#[tokio::test]
+async fn blob_full_request_and_response() {
+    // Test: peer A sends BlobFullRequest, peer B responds with BlobFull
+    let ep1 = create_endpoint("127.0.0.1:0".parse().unwrap()).unwrap();
+    let ep2 = create_endpoint("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr2 = ep2.local_addr().unwrap();
+
+    let id1 = Identity::generate();
+    let id2 = Identity::generate();
+    let pid1 = id1.peer_id();
+    let pid2 = id2.peer_id();
+
+    let mut pm1 = PeerManager::new(ep1, pid1, id1.to_bytes());
+    let mut pm2 = PeerManager::new(ep2.clone(), pid2.clone(), id2.to_bytes());
+
+    let mut events1 = pm1.take_event_receiver().unwrap();
+    let mut events2 = pm2.take_event_receiver().unwrap();
+
+    let conn2 = pm2.connections_handle();
+    let tx2 = pm2.event_sender();
+    tokio::spawn(PeerManager::accept_loop(
+        ep2, pid2, id2.to_bytes(), tx2, conn2, None,
+    ));
+
+    let conn_id1 = pm1.connect(addr2).await.unwrap();
+
+    // Wait for both sides to connect
+    let _ev1 = events1.recv().await.unwrap();
+    let ev2 = events2.recv().await.unwrap();
+    let conn_id2 = match ev2 {
+        PeerEvent::Connected { conn_id, .. } => conn_id,
+        _ => panic!("expected Connected"),
+    };
+
+    // Peer 1 sends BlobFullRequest
+    let blob_id = BlobId([42u8; 32]);
+    pm1.send_to(conn_id1, &WireMessage::BlobFullRequest { blob_id: blob_id.clone() })
+        .await
+        .unwrap();
+
+    // Peer 2 receives the request
+    let ev = events2.recv().await.unwrap();
+    match ev {
+        PeerEvent::Message {
+            message: WireMessage::BlobFullRequest { blob_id: recv_id },
+            ..
+        } => {
+            assert_eq!(recv_id, blob_id);
+            // Peer 2 responds with full blob data
+            let data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+            pm2.send_to(conn_id2, &WireMessage::BlobFull {
+                blob_id: recv_id,
+                data: data.clone(),
+            })
+            .await
+            .unwrap();
+        }
+        _ => panic!("expected BlobFullRequest, got {ev:?}"),
+    }
+
+    // Peer 1 receives the full blob
+    let ev = events1.recv().await.unwrap();
+    match ev {
+        PeerEvent::Message {
+            message: WireMessage::BlobFull { blob_id: recv_id, data },
+            ..
+        } => {
+            assert_eq!(recv_id, blob_id);
+            assert_eq!(data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        }
+        _ => panic!("expected BlobFull, got {ev:?}"),
+    }
+}
+
+#[tokio::test]
+async fn relay_event_error_variant_exists() {
+    // Verify the RelayEvent::Error variant is constructable and matchable.
+    // Full relay integration testing requires a running relay server,
+    // so we validate the type system here.
+    use veil_net::RelayEvent;
+
+    let err = RelayEvent::Error {
+        code: "RateLimited".into(),
+        message: "forward rate limit exceeded".into(),
+    };
+    match err {
+        RelayEvent::Error { code, message } => {
+            assert_eq!(code, "RateLimited");
+            assert_eq!(message, "forward rate limit exceeded");
+        }
+        _ => panic!("expected Error variant"),
+    }
 }
