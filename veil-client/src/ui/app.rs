@@ -189,6 +189,42 @@ impl App {
             .show();
     }
 
+    /// Seal a message, send it via the network channel, and persist to the store.
+    /// Returns `Some(sealed)` on success, `None` if device/group/keyring is unavailable.
+    pub(crate) fn seal_send_persist(
+        &mut self,
+        content: &veil_core::MessageContent,
+    ) -> Option<SealedMessage> {
+        let device = self.device.as_ref()?;
+        let group = self.current_group.as_ref()?;
+        let ring = match group.key_ring.lock() {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::error!("key ring lock poisoned");
+                return None;
+            }
+        };
+        let sealed = match SealedMessage::seal(content, ring.current(), &group.id.0, device.identity()) {
+            Ok(s) => s,
+            Err(e) => {
+                drop(ring);
+                self.messages
+                    .push(ChatMessage::system(format!("encrypt error: {e}")));
+                return None;
+            }
+        };
+        drop(ring);
+        if let Some(ref mut tx) = self.net_cmd_tx
+            && let Err(e) = tx.try_send(super::message::NetCommand::SendMessage(sealed.clone())) {
+                tracing::warn!("failed to send message: {e}");
+            }
+        if let Some(ref store) = self.store
+            && let Err(e) = store.store_message(&sealed) {
+                tracing::warn!("failed to persist message: {e}");
+            }
+        Some(sealed)
+    }
+
     /// Derive a deterministic ChannelId from group + channel name.
     pub(crate) fn current_channel_id(&self, group: &GroupState) -> ChannelId {
         let channel_name = self.current_channel.as_deref().unwrap_or("general");

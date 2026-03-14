@@ -57,7 +57,9 @@ impl App {
                             .map(|(id, name, key)| {
                                 let keyring = GroupKeyRing::new(key, master_id.clone());
                                 // Re-save as v2
-                                let _ = store.store_group_v2(&id, &name, &keyring);
+                                if let Err(e) = store.store_group_v2(&id, &name, &keyring) {
+                                    tracing::warn!("failed to persist migrated group: {e}");
+                                }
                                 GroupState {
                                     name,
                                     id: veil_core::GroupId(id),
@@ -93,9 +95,10 @@ impl App {
             let keyring = GroupKeyRing::new(group_key, master_id);
 
             // Persist the default group
-            if let Some(ref store) = self.store {
-                let _ = store.store_group_v2(&group_id_bytes, "My Group", &keyring);
-            }
+            if let Some(ref store) = self.store
+                && let Err(e) = store.store_group_v2(&group_id_bytes, "My Group", &keyring) {
+                    tracing::warn!("failed to persist default group: {e}");
+                }
 
             let group_state = GroupState {
                 name: "My Group".into(),

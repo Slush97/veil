@@ -22,9 +22,10 @@ impl App {
                             };
                             ring.rotate_forward(sender.verifying_key.clone());
 
-                            if let Some(ref store) = self.store {
-                                let _ = store.store_group_v2(&group.id.0, &group.name, &ring);
-                            }
+                            if let Some(ref store) = self.store
+                                && let Err(e) = store.store_group_v2(&group.id.0, &group.name, &ring) {
+                                    tracing::warn!("failed to persist group after key rotation: {e}");
+                                }
                         }
                         self.messages.push(ChatMessage::system(format!(
                             "Key rotated (epoch {})",
@@ -52,10 +53,10 @@ impl App {
                                     };
                                     ring.apply_eviction(new_key, epoch.clone());
 
-                                    if let Some(ref store) = self.store {
-                                        let _ =
-                                            store.store_group_v2(&group.id.0, &group.name, &ring);
-                                    }
+                                    if let Some(ref store) = self.store
+                                        && let Err(e) = store.store_group_v2(&group.id.0, &group.name, &ring) {
+                                            tracing::warn!("failed to persist group after key rotation: {e}");
+                                        }
                                 }
                             }
                         }
@@ -72,9 +73,10 @@ impl App {
             ControlMessage::DeviceAnnouncement { certificate } => {
                 if certificate.verify() {
                     // Store the certificate
-                    if let Some(ref store) = self.store {
-                        let _ = store.store_device_cert(&certificate.device_id, &certificate);
-                    }
+                    if let Some(ref store) = self.store
+                        && let Err(e) = store.store_device_cert(&certificate.device_id, &certificate) {
+                            tracing::warn!("failed to persist device cert: {e}");
+                        }
 
                     // Add to all groups' device_certs
                     for group in &mut self.groups {
@@ -118,9 +120,10 @@ impl App {
                 let fp = member_id.fingerprint();
                 if !display_name.is_empty() {
                     self.display_names.insert(fp.clone(), display_name.clone());
-                    if let Some(ref store) = self.store {
-                        let _ = store.store_display_name(&fp, &display_name);
-                    }
+                    if let Some(ref store) = self.store
+                        && let Err(e) = store.store_display_name(&fp, &display_name) {
+                            tracing::warn!("failed to persist display name: {e}");
+                        }
                 }
                 let invited_by_name = self.resolve_display_name(&invited_by);
                 self.messages.push(ChatMessage::system(format!(

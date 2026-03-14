@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use veil_core::{MessageContent, MessageKind, SealedMessage};
+use veil_core::{MessageContent, MessageKind};
 use veil_crypto::PeerId;
 
 use crate::ui::app::App;
@@ -26,9 +26,10 @@ impl App {
             let fp = self.master_peer_id().fingerprint();
             let name = self.display_name_input.trim().to_string();
             self.display_names.insert(fp.clone(), name.clone());
-            if let Some(ref store) = self.store {
-                let _ = store.store_display_name(&fp, &name);
-            }
+            if let Some(ref store) = self.store
+                && let Err(e) = store.store_display_name(&fp, &name) {
+                    tracing::warn!("failed to persist display name: {e}");
+                }
             self.display_name_input.clear();
         }
     }
@@ -41,49 +42,30 @@ impl App {
 
     pub(crate) fn update_react(&mut self, idx: usize, emoji: String) {
         if idx < self.messages.len() {
-            let msg = &self.messages[idx];
-            if let Some(ref msg_id) = msg.id {
-                // Send reaction as sealed message
-                if let Some(ref group) = self.current_group {
-                    let Some(device) = self.device.as_ref() else {
-                        return;
-                    };
-                    let content = MessageContent {
-                        kind: MessageKind::Reaction {
-                            target_id: msg_id.clone(),
-                            emoji: emoji.clone(),
-                        },
-                        timestamp: chrono::Utc::now(),
-                        channel_id: self.current_channel_id(group),
-                    };
-                    let Ok(ring) = group.key_ring.lock() else {
-                        tracing::error!("key ring lock poisoned");
-                        return;
-                    };
-                    if let Ok(sealed) = SealedMessage::seal(
-                        &content,
-                        ring.current(),
-                        &group.id.0,
-                        device.identity(),
-                    ) {
-                        drop(ring);
-                        if let Some(ref mut tx) = self.net_cmd_tx {
-                            let _ = tx.try_send(NetCommand::SendMessage(sealed.clone()));
-                        }
-                        if let Some(ref store) = self.store
-                            && let Err(e) = store.store_message(&sealed)
-                        {
-                            tracing::warn!("failed to persist message: {e}");
-                        }
-                    }
+            let msg_id = self.messages[idx].id.clone();
+            if let Some(msg_id) = msg_id {
+                let channel_id = self
+                    .current_group
+                    .as_ref()
+                    .map(|g| self.current_channel_id(g))
+                    .unwrap_or_default();
+
+                let content = MessageContent {
+                    kind: MessageKind::Reaction {
+                        target_id: msg_id.clone(),
+                        emoji: emoji.clone(),
+                    },
+                    timestamp: chrono::Utc::now(),
+                    channel_id,
+                };
+                if self.seal_send_persist(&content).is_some() {
+                    let key = msg_id.0;
+                    let our_pid = self.master_peer_id();
+                    self.reactions
+                        .entry(key)
+                        .or_default()
+                        .push((our_pid, emoji));
                 }
-                // Update local reactions
-                let key = msg_id.0;
-                let our_pid = self.master_peer_id();
-                self.reactions
-                    .entry(key)
-                    .or_default()
-                    .push((our_pid, emoji));
             }
         }
     }
@@ -117,9 +99,10 @@ impl App {
     pub(crate) fn update_connect_discovered_peer(&mut self, addr: SocketAddr) {
         self.connection_state =
             ConnectionState::Connecting(format!("Connecting to LAN peer {addr}..."));
-        if let Some(ref mut tx) = self.net_cmd_tx {
-            let _ = tx.try_send(NetCommand::Connect(addr));
-        }
+        if let Some(ref mut tx) = self.net_cmd_tx
+            && let Err(e) = tx.try_send(NetCommand::Connect(addr)) {
+                tracing::warn!("failed to send connect command: {e}");
+            }
     }
 
     pub(crate) fn update_lan_peer_discovered(

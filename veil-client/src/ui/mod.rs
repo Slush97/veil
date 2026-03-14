@@ -8,3 +8,6 @@ mod update;
 mod views;
 
 pub use app::App;
+
+#[cfg(test)]
+mod tests;

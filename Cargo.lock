@@ -4789,6 +4789,7 @@ dependencies = [
  "iced",
  "notify-rust",
  "rfd",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

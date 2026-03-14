@@ -28,15 +28,15 @@ impl App {
 
             if let Some(ref store) = self.store
                 && let Some(ref mut tx) = self.net_cmd_tx
-            {
-                let _ = tx.try_send(NetCommand::SendFile {
+                && let Err(e) = tx.try_send(NetCommand::SendFile {
                     path,
                     group_id: group.id.clone(),
                     group_key,
                     store: store.clone(),
                     identity_bytes: device.device_key_bytes(),
-                });
-            }
+                }) {
+                    tracing::warn!("failed to send file command: {e}");
+                }
         }
     }
 
@@ -68,13 +68,13 @@ impl App {
         if let Some(ref store) = self.store
             && let Ok(Some(data)) = store.get_blob_full(&blob_id)
             && let Some(ref mut tx) = self.net_cmd_tx
-        {
-            let _ = tx.try_send(NetCommand::BlobResponse {
+            && let Err(e) = tx.try_send(NetCommand::BlobResponse {
                 conn_id,
                 blob_id,
                 data,
-            });
-        }
+            }) {
+                tracing::warn!("failed to send blob response: {e}");
+            }
     }
 
     pub(crate) fn update_blob_received(&mut self, blob_id: BlobId) {

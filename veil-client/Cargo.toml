@@ -25,5 +25,8 @@ x25519-dalek.workspace = true
 notify-rust.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

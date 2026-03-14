@@ -22,26 +22,28 @@ impl App {
             };
             let current_key = Arc::new(ring.current().duplicate());
             drop(ring);
-            if let Some(ref mut tx) = self.net_cmd_tx {
-                let _ = tx.try_send(NetCommand::CreateInvite {
+            if let Some(ref mut tx) = self.net_cmd_tx
+                && let Err(e) = tx.try_send(NetCommand::CreateInvite {
                     group_id: group.id.clone(),
                     group_name: group.name.clone(),
                     relay_addr,
                     passphrase: self.invite_passphrase.clone(),
                     group_key: current_key,
-                });
-            }
+                }) {
+                    tracing::warn!("failed to send create invite: {e}");
+                }
         }
     }
 
     pub(crate) fn update_accept_invite(&mut self) {
         if !self.invite_input.is_empty() {
-            if let Some(ref mut tx) = self.net_cmd_tx {
-                let _ = tx.try_send(NetCommand::AcceptInvite {
+            if let Some(ref mut tx) = self.net_cmd_tx
+                && let Err(e) = tx.try_send(NetCommand::AcceptInvite {
                     url: self.invite_input.clone(),
                     passphrase: self.invite_passphrase.clone(),
-                });
-            }
+                }) {
+                    tracing::warn!("failed to send accept invite: {e}");
+                }
             // Zeroize invite passphrase after use
             self.invite_passphrase.zeroize();
         }
@@ -70,7 +72,9 @@ impl App {
                 tracing::error!("key ring lock poisoned");
                 return;
             };
-            let _ = store.store_group_v2(&group_state.id.0, &group_state.name, &ring);
+            if let Err(e) = store.store_group_v2(&group_state.id.0, &group_state.name, &ring) {
+                tracing::warn!("failed to persist group: {e}");
+            }
         }
 
         self.groups.push(group_state.clone());

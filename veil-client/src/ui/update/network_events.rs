@@ -22,9 +22,10 @@ impl App {
         // Flush pending messages
         let pending: Vec<SealedMessage> = self.pending_messages.drain(..).collect();
         for sealed in pending {
-            if let Some(ref mut tx) = self.net_cmd_tx {
-                let _ = tx.try_send(NetCommand::SendMessage(sealed));
-            }
+            if let Some(ref mut tx) = self.net_cmd_tx
+                && let Err(e) = tx.try_send(NetCommand::SendMessage(sealed)) {
+                    tracing::warn!("failed to flush pending message: {e}");
+                }
         }
         // Update status of pending messages to Sent
         for msg in &mut self.messages {
@@ -37,9 +38,9 @@ impl App {
         if !self.relay_addr_input.is_empty()
             && let Ok(addr) = self.relay_addr_input.parse::<SocketAddr>()
             && let Some(ref mut tx) = self.net_cmd_tx
-        {
-            let _ = tx.try_send(NetCommand::ConnectRelay(addr));
-        }
+            && let Err(e) = tx.try_send(NetCommand::ConnectRelay(addr)) {
+                tracing::warn!("failed to auto-reconnect relay: {e}");
+            }
     }
 
     pub(crate) fn update_peer_connected(
@@ -74,9 +75,10 @@ impl App {
             && cert.verify()
         {
             // Store peer's device cert
-            if let Some(ref store) = self.store {
-                let _ = store.store_device_cert(&cert.device_id, &cert);
-            }
+            if let Some(ref store) = self.store
+                && let Err(e) = store.store_device_cert(&cert.device_id, &cert) {
+                    tracing::warn!("failed to persist device cert: {e}");
+                }
             device_certs.push(cert);
         }
 
@@ -274,11 +276,12 @@ impl App {
                                     FileStatus::Available
                                 } else {
                                     // Request full blob from peers via BlobFullRequest
-                                    if let Some(ref mut tx) = self.net_cmd_tx {
-                                        let _ = tx.try_send(NetCommand::RequestBlob {
+                                    if let Some(ref mut tx) = self.net_cmd_tx
+                                        && let Err(e) = tx.try_send(NetCommand::RequestBlob {
                                             blob_id: blob_id.clone(),
-                                        });
-                                    }
+                                        }) {
+                                            tracing::warn!("failed to request blob: {e}");
+                                        }
                                     FileStatus::Downloading
                                 }
                             }

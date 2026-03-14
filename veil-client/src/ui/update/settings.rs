@@ -12,22 +12,25 @@ impl App {
                 ThemeChoice::Dark => "dark",
                 ThemeChoice::Light => "light",
             };
-            let _ = store.store_setting("theme", theme_str);
+            if let Err(e) = store.store_setting("theme", theme_str) {
+                tracing::warn!("failed to persist theme: {e}");
+            }
         }
     }
 
     pub(crate) fn update_toggle_notifications(&mut self) {
         self.notifications_enabled = !self.notifications_enabled;
-        if let Some(ref store) = self.store {
-            let _ = store.store_setting(
+        if let Some(ref store) = self.store
+            && let Err(e) = store.store_setting(
                 "notifications",
                 if self.notifications_enabled {
                     "true"
                 } else {
                     "false"
                 },
-            );
-        }
+            ) {
+                tracing::warn!("failed to persist notifications: {e}");
+            }
     }
 
     pub(crate) fn update_export_identity(&mut self) {
