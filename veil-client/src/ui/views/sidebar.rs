@@ -1,248 +1,226 @@
-use iced::widget::{Column, button, column, container, row, scrollable, text, text_input};
-use iced::{Element, Length};
+use esox_ui::{Ui, id};
+use esox_ui::id::fnv1a_runtime;
 
-use crate::ui::app::App;
-use crate::ui::message::Message;
+use crate::ui::app::VeilApp;
+use crate::ui::types::*;
 
-impl App {
-    pub(crate) fn view_sidebar(&self) -> Element<'_, Message> {
-        let mut group_list = Column::new().spacing(4).padding(8);
-        group_list = group_list.push(text("Groups").size(12));
-
-        for group in &self.groups {
-            let is_selected = self
-                .current_group
-                .as_ref()
-                .is_some_and(|g| g.name == group.name);
-            let unread = self.unread_counts.get(&group.id.0).copied().unwrap_or(0);
-            let badge = if unread > 0 {
-                format!(" ({})", unread)
-            } else {
-                String::new()
-            };
-            let label = if is_selected {
-                text(format!("> {}{badge}", group.name)).size(14)
-            } else {
-                text(format!("  {}{badge}", group.name)).size(14)
-            };
-            group_list = group_list.push(
-                button(label)
-                    .on_press(Message::SelectGroup(group.name.clone()))
-                    .width(Length::Fill)
-                    .padding(4),
-            );
-        }
-
-        let mut channel_list = Column::new().spacing(4).padding(8);
-        channel_list = channel_list.push(text("Channels").size(12));
-
-        for channel in &self.channels {
-            let is_selected = self.current_channel.as_ref() == Some(channel);
-            let label = if is_selected {
-                text(format!("# {channel}")).size(14)
-            } else {
-                text(format!("  # {channel}")).size(14)
-            };
-            channel_list = channel_list.push(
-                button(label)
-                    .on_press(Message::SelectChannel(channel.clone()))
-                    .width(Length::Fill)
-                    .padding(2),
-            );
-        }
-
-        // Members section
-        let mut peers_section = Column::new().spacing(2).padding(8);
-        peers_section = peers_section.push(text("Members").size(12));
-        if let Some(ref master) = self.master {
-            let our_name = self.resolve_display_name(&master.peer_id());
-            peers_section = peers_section.push(text(format!("{our_name} (you)")).size(10));
-        }
-        for (_, pid) in &self.connected_peers {
-            let name = self.resolve_display_name(pid);
-            let is_typing = self
-                .typing_peers
-                .iter()
-                .any(|(p, t)| p == pid && t.elapsed() < std::time::Duration::from_secs(5));
-            let status = if is_typing { " (typing)" } else { " (online)" };
-            peers_section = peers_section.push(text(format!("{name}{status}")).size(10));
-        }
-
-        // Set display name
-        let name_section = column![
-            text("Display Name").size(12),
-            row![
-                text_input("Your name", &self.display_name_input)
-                    .on_input(Message::DisplayNameInputChanged)
-                    .on_submit(Message::SetDisplayName)
-                    .padding(4)
-                    .width(Length::Fill),
-                button("Set").on_press(Message::SetDisplayName).padding(4),
-            ]
-            .spacing(4),
-        ]
-        .spacing(4)
-        .padding(8);
-
-        // LAN Peers
-        let mut lan_section = Column::new().spacing(2).padding(8);
-        if !self.discovered_peers.is_empty() {
-            lan_section = lan_section.push(text("LAN Peers").size(12));
-            for (_, addr, fp) in &self.discovered_peers {
-                let label = self
-                    .display_names
-                    .get(fp)
-                    .cloned()
-                    .unwrap_or_else(|| fp.clone());
-                lan_section = lan_section.push(
-                    button(text(label.to_string()).size(10))
-                        .on_press(Message::ConnectDiscoveredPeer(*addr))
-                        .padding(2)
-                        .width(Length::Fill),
-                );
-            }
-        }
-
-        // Connect-to-peer input
-        let connect_section = column![
-            text("Connect").size(12),
-            text_input("host:port", &self.connect_input)
-                .on_input(Message::ConnectInputChanged)
-                .on_submit(Message::ConnectToPeer)
-                .padding(4)
-                .width(Length::Fill),
-            text(self.connection_state.to_string()).size(10),
-        ]
-        .spacing(4)
-        .padding(8);
-
-        // Relay section
-        let relay_status_text = if self.relay_connected {
-            "Relay: connected"
-        } else {
-            "Relay: disconnected"
-        };
-        let relay_section = column![
-            text("Relay").size(12),
-            text_input("relay host:port", &self.relay_addr_input)
-                .on_input(Message::RelayAddrChanged)
-                .on_submit(Message::ConnectToRelay)
-                .padding(4)
-                .width(Length::Fill),
-            button("Connect Relay")
-                .on_press(Message::ConnectToRelay)
-                .padding(4),
-            text(relay_status_text).size(10),
-        ]
-        .spacing(4)
-        .padding(8);
-
-        // Invite section
-        let mut invite_section = column![
-            text("Invite").size(12),
-            text_input("Passphrase", &self.invite_passphrase)
-                .on_input(Message::InvitePassphraseChanged)
-                .secure(true)
-                .padding(4)
-                .width(Length::Fill),
-            button("Create Invite")
-                .on_press(Message::CreateInvite)
-                .padding(4),
-        ]
-        .spacing(4)
-        .padding(8);
-
-        if let Some(ref url) = self.generated_invite_url {
-            invite_section =
-                invite_section.push(text_input("Invite URL", url).padding(4).width(Length::Fill));
-        }
-
-        invite_section = invite_section.push(
-            text_input("Paste invite URL", &self.invite_input)
-                .on_input(Message::InviteInputChanged)
-                .on_submit(Message::AcceptInvite)
-                .padding(4)
-                .width(Length::Fill),
-        );
-        invite_section =
-            invite_section.push(button("Join").on_press(Message::AcceptInvite).padding(4));
-
-        // Contact search section
-        let mut contact_section = column![
-            text("Add Contact").size(12),
-            text_input("Search @username", &self.contact_search_input)
-                .on_input(Message::ContactSearchInputChanged)
-                .on_submit(Message::LookupContact)
-                .padding(4)
-                .width(Length::Fill),
-            button("Search")
-                .on_press(Message::LookupContact)
-                .padding(4),
-        ]
-        .spacing(4)
-        .padding(8);
-
-        if let Some(ref result) = self.contact_search_result {
-            match result {
-                crate::ui::types::ContactSearchResult::Found { username, public_key } => {
-                    let un = username.clone();
-                    let pk = *public_key;
-                    contact_section = contact_section.push(
-                        row![
-                            text(format!("@{un} found")).size(11),
-                            button("Add")
-                                .on_press(Message::AddContact { username: un, public_key: pk })
-                                .padding(4),
-                        ]
-                        .spacing(4),
-                    );
+impl VeilApp {
+    pub(crate) fn draw_sidebar(&mut self, ui: &mut Ui) {
+        let visible_h = self.height as f32;
+        ui.scrollable(id!("sidebar_scroll"), visible_h, |ui| {
+            ui.padding(8.0, |ui| {
+                // Show username if registered
+                if let Some(ref username) = self.app.username {
+                    ui.label(&format!("@{username}"));
+                    ui.spacing(8.0);
                 }
-                crate::ui::types::ContactSearchResult::NotFound(username) => {
-                    contact_section = contact_section.push(
-                        text(format!("@{username} not found")).size(11),
-                    );
+
+                // Groups section
+                ui.header_label("Groups");
+                ui.spacing(4.0);
+
+                let groups: Vec<(String, [u8; 32], usize)> = self.app.groups.iter().map(|g| {
+                    let unread = self.app.unread_counts.get(&g.id.0).copied().unwrap_or(0);
+                    (g.name.clone(), g.id.0, unread)
+                }).collect();
+
+                let current_group_name = self.app.current_group.as_ref().map(|g| g.name.clone());
+
+                for (name, _id_bytes, unread) in &groups {
+                    let is_selected = current_group_name.as_ref() == Some(name);
+                    let label = if is_selected {
+                        format!("> {name}")
+                    } else {
+                        format!("  {name}")
+                    };
+
+                    let btn_id = fnv1a_runtime(&format!("group_{name}"));
+                    ui.row_spaced(4.0, |ui| {
+                        if ui.button(btn_id, &label).clicked {
+                            self.sync_inputs_to_app();
+                            self.app.update_select_group(name.clone());
+                            self.sync_app_to_inputs();
+                        }
+                        if *unread > 0 {
+                            ui.badge(*unread as u32);
+                        }
+                    });
                 }
-                crate::ui::types::ContactSearchResult::Searching => {
-                    contact_section = contact_section.push(
-                        text("Searching...").size(11),
-                    );
+
+                ui.spacing(8.0);
+
+                // Channels section
+                ui.header_label("Channels");
+                ui.spacing(4.0);
+
+                let channels = self.app.channels.clone();
+                let current_channel = self.app.current_channel.clone();
+                for channel in &channels {
+                    let is_selected = current_channel.as_ref() == Some(channel);
+                    let label = if is_selected {
+                        format!("# {channel}")
+                    } else {
+                        format!("  # {channel}")
+                    };
+                    let btn_id = fnv1a_runtime(&format!("ch_{channel}"));
+                    if ui.ghost_button(btn_id, &label).clicked {
+                        self.app.current_channel = Some(channel.clone());
+                    }
                 }
-            }
-        }
 
-        // Show username if registered
-        let mut user_section = Column::new().spacing(2).padding(8);
-        if let Some(ref username) = self.username {
-            user_section = user_section.push(text(format!("@{username}")).size(14));
-        }
+                ui.spacing(8.0);
 
-        // Settings button at bottom
-        let settings_button = container(
-            button("Settings")
-                .on_press(Message::OpenSettings)
-                .padding(6)
-                .width(Length::Fill),
-        )
-        .padding(8);
+                // Contact search section
+                ui.header_label("Add Contact");
+                ui.spacing(4.0);
+                ui.text_input(id!("contact_search"), &mut self.input_contact_search, "Search @username");
+                ui.spacing(4.0);
+                if ui.button(id!("contact_search_btn"), "Search").clicked {
+                    self.sync_inputs_to_app();
+                    self.app.update_lookup_contact();
+                }
 
-        container(scrollable(
-            column![
-                user_section,
-                group_list,
-                channel_list,
-                contact_section,
-                peers_section,
-                name_section,
-                lan_section,
-                connect_section,
-                relay_section,
-                invite_section,
-                settings_button,
-            ]
-            .spacing(8)
-            .width(220),
-        ))
-        .height(Length::Fill)
-        .into()
+                if let Some(ref result) = self.app.contact_search_result {
+                    ui.spacing(4.0);
+                    match result {
+                        ContactSearchResult::Found { username, public_key } => {
+                            let un = username.clone();
+                            let pk = *public_key;
+                            ui.row_spaced(4.0, |ui| {
+                                ui.muted_label(&format!("@{un} found"));
+                                if ui.button(id!("add_contact"), "Add").clicked {
+                                    self.sync_inputs_to_app();
+                                    self.app.update_add_contact(un, pk);
+                                    self.sync_app_to_inputs();
+                                }
+                            });
+                        }
+                        ContactSearchResult::NotFound(username) => {
+                            ui.muted_label(&format!("@{username} not found"));
+                        }
+                        ContactSearchResult::Searching => {
+                            ui.muted_label("Searching...");
+                        }
+                    }
+                }
+
+                ui.spacing(8.0);
+
+                // Members section
+                ui.header_label("Members");
+                ui.spacing(2.0);
+                if let Some(ref master) = self.app.master {
+                    let our_name = self.app.resolve_display_name(&master.peer_id());
+                    ui.muted_label(&format!("{our_name} (you)"));
+                }
+                let peers: Vec<_> = self.app.connected_peers.iter().map(|(_, pid)| {
+                    let name = self.app.resolve_display_name(pid);
+                    let is_typing = self.app.typing_peers.iter().any(|(p, t)| {
+                        p == pid && t.elapsed() < std::time::Duration::from_secs(5)
+                    });
+                    (name, is_typing)
+                }).collect();
+                for (name, is_typing) in &peers {
+                    let status = if *is_typing { " (typing)" } else { " (online)" };
+                    ui.muted_label(&format!("{name}{status}"));
+                }
+
+                ui.spacing(8.0);
+
+                // Display name input
+                ui.header_label("Display Name");
+                ui.spacing(4.0);
+                ui.text_input(id!("display_name"), &mut self.input_display_name, "Your name");
+                ui.spacing(4.0);
+                if ui.button(id!("set_display_name"), "Set").clicked {
+                    self.sync_inputs_to_app();
+                    self.app.update_set_display_name();
+                    self.sync_app_to_inputs();
+                }
+
+                ui.spacing(8.0);
+
+                // LAN Peers
+                let discovered: Vec<_> = self.app.discovered_peers.clone();
+                if !discovered.is_empty() {
+                    ui.header_label("LAN Peers");
+                    ui.spacing(2.0);
+                    for (_, addr, fp) in &discovered {
+                        let label = self.app.display_names.get(fp)
+                            .cloned()
+                            .unwrap_or_else(|| fp.clone());
+                        let btn_id = fnv1a_runtime(&format!("lan_{addr}"));
+                        if ui.ghost_button(btn_id, &label).clicked {
+                            self.sync_inputs_to_app();
+                            self.app.update_connect_discovered_peer(*addr);
+                        }
+                    }
+                    ui.spacing(8.0);
+                }
+
+                // Connect to peer
+                ui.header_label("Connect");
+                ui.spacing(4.0);
+                ui.text_input(id!("connect_addr"), &mut self.input_connect, "host:port");
+                ui.spacing(4.0);
+                if ui.button(id!("connect_btn"), "Connect").clicked {
+                    self.sync_inputs_to_app();
+                    self.app.update_connect_to_peer();
+                    self.sync_app_to_inputs();
+                }
+                ui.muted_label(&self.app.connection_state.to_string());
+
+                ui.spacing(8.0);
+
+                // Relay section
+                ui.header_label("Relay");
+                ui.spacing(4.0);
+                ui.text_input(id!("relay_addr"), &mut self.input_relay_addr, "relay host:port");
+                ui.spacing(4.0);
+                if ui.button(id!("relay_connect"), "Connect Relay").clicked {
+                    self.sync_inputs_to_app();
+                    self.app.update_connect_to_relay();
+                }
+                let relay_status = if self.app.relay_connected {
+                    "Relay: connected"
+                } else {
+                    "Relay: disconnected"
+                };
+                ui.muted_label(relay_status);
+
+                ui.spacing(8.0);
+
+                // Invite section
+                ui.header_label("Invite");
+                ui.spacing(4.0);
+                ui.text_input(id!("invite_pass"), &mut self.input_invite_passphrase, "Passphrase");
+                ui.spacing(4.0);
+                if ui.button(id!("create_invite"), "Create Invite").clicked {
+                    self.sync_inputs_to_app();
+                    self.app.update_create_invite();
+                }
+
+                if let Some(ref url) = self.app.generated_invite_url {
+                    ui.spacing(4.0);
+                    ui.muted_label(url);
+                }
+
+                ui.spacing(4.0);
+                ui.text_input(id!("invite_url"), &mut self.input_invite_url, "Paste invite URL");
+                ui.spacing(4.0);
+                if ui.button(id!("join_invite"), "Join").clicked {
+                    self.sync_inputs_to_app();
+                    self.app.update_accept_invite();
+                    self.sync_app_to_inputs();
+                }
+
+                ui.spacing(8.0);
+
+                // Settings button
+                if ui.button(id!("settings_btn"), "Settings").clicked {
+                    self.app.screen = Screen::Settings;
+                }
+            });
+        });
     }
 }

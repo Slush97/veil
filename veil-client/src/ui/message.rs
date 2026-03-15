@@ -57,27 +57,14 @@ pub enum NetCommand {
     },
 }
 
+/// Events sent from the network worker back to the UI.
 #[derive(Debug, Clone)]
 #[allow(dead_code, clippy::enum_variant_names)]
-pub enum Message {
-    // Setup
-    CreateIdentity,
-    LoadIdentity,
-    PassphraseChanged(String),
-    // Recovery phrase
-    ConfirmRecoveryPhrase,
-    // Chat
-    InputChanged(String),
-    Send,
-    SelectGroup(String),
-    SelectChannel(String),
-    // Connection
-    ConnectInputChanged(String),
-    ConnectToPeer,
-    // Network events
+pub enum NetworkEvent {
+    // Network lifecycle
     NetworkReady {
         local_addr: SocketAddr,
-        cmd_tx: futures::channel::mpsc::Sender<NetCommand>,
+        cmd_tx: tokio::sync::mpsc::Sender<NetCommand>,
     },
     PeerConnected {
         conn_id: ConnectionId,
@@ -95,26 +82,14 @@ pub enum Message {
     // Relay
     RelayConnected,
     RelayDisconnected(String),
-    // Relay UI
-    RelayAddrChanged(String),
-    ConnectToRelay,
-    // Invite UI
-    InvitePassphraseChanged(String),
-    CreateInvite,
+    // Invite
     InviteCreated(String),
-    InviteInputChanged(String),
-    AcceptInvite,
     InviteAccepted {
         group_name: String,
         group_id: GroupId,
         group_key: SharedGroupKey,
     },
     InviteFailed(String),
-    // Edit/Delete
-    EditMessage(usize),
-    CancelEdit,
-    ConfirmEdit,
-    DeleteMessage(usize),
     // Typing/Presence
     TypingStarted {
         peer_id: PeerId,
@@ -128,8 +103,6 @@ pub enum Message {
         last_read: MessageId,
     },
     // File
-    PickFile,
-    SendFile(std::path::PathBuf),
     FileSent {
         filename: String,
     },
@@ -141,47 +114,20 @@ pub enum Message {
     BlobReceived {
         blob_id: BlobId,
     },
-    SaveFile(BlobId, String),
     // Relay errors
     RelayError {
         code: String,
         message: String,
     },
-    // Phase 2: Display names
-    DisplayNameInputChanged(String),
-    SetDisplayName,
-    // Phase 3: Replies + reactions
-    ReplyTo(usize),
-    CancelReply,
-    React(usize, String),
-    // Phase 4: Search + discovery
-    ToggleSearch,
-    SearchQueryChanged(String),
-    ConnectDiscoveredPeer(SocketAddr),
+    // Username registry + contacts
+    RegisterResult { success: bool, message: String },
+    ContactFound { username: String, public_key: [u8; 32] },
+    ContactNotFound(String),
+    // LAN discovery
     LanPeerDiscovered {
         name: String,
         addr: SocketAddr,
         fingerprint: String,
     },
     LanPeerLost(String),
-    LoadMoreMessages,
-    // Phase 5: Settings
-    OpenSettings,
-    CloseSettings,
-    ToggleTheme,
-    ToggleNotifications,
-    DeviceNameInputChanged(String),
-    ExportIdentity,
-    // Username registry + contacts
-    UsernameInputChanged(String),
-    ContactSearchInputChanged(String),
-    RegisterUsername,
-    RegisterResult { success: bool, message: String },
-    LookupContact,
-    ContactFound { username: String, public_key: [u8; 32] },
-    ContactNotFound(String),
-    AddContact { username: String, public_key: [u8; 32] },
-    // Keyboard shortcuts
-    EscapePressed,
-    UpArrowPressed,
 }

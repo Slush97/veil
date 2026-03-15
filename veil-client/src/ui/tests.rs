@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use futures::channel::mpsc;
+use tokio::sync::mpsc;
 use veil_core::{ChannelId, GroupId, MessageId};
 use veil_crypto::{DeviceIdentity, GroupKey, GroupKeyRing, MasterIdentity};
 use veil_store::LocalStore;
@@ -395,12 +395,12 @@ fn react_sends_and_tracks() {
         file_info: None,
     });
 
-    app.update_react(0, "👍".into());
+    app.update_react(0, "\u{1F44D}".into());
 
     let reactions = app.reactions.get(&msg_id.0).unwrap();
     assert_eq!(reactions.len(), 1);
     assert_eq!(reactions[0].0, our_id);
-    assert_eq!(reactions[0].1, "👍");
+    assert_eq!(reactions[0].1, "\u{1F44D}");
 
     assert!(rx.try_recv().is_ok());
 }

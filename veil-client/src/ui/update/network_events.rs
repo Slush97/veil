@@ -13,7 +13,7 @@ impl App {
     pub(crate) fn update_network_ready(
         &mut self,
         local_addr: SocketAddr,
-        cmd_tx: futures::channel::mpsc::Sender<NetCommand>,
+        cmd_tx: tokio::sync::mpsc::Sender<NetCommand>,
     ) {
         self.local_addr = Some(local_addr);
         self.net_cmd_tx = Some(cmd_tx);

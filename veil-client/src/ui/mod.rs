@@ -7,7 +7,7 @@ mod types;
 mod update;
 mod views;
 
-pub use app::App;
+pub use app::VeilApp;
 
 #[cfg(test)]
 mod tests;

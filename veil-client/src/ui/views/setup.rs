@@ -1,97 +1,92 @@
-use iced::widget::{Column, button, column, container, row, text, text_input};
-use iced::{Element, Length};
+use esox_ui::{Ui, id};
 
-use crate::ui::app::App;
-use crate::ui::message::Message;
+use crate::ui::app::VeilApp;
 
-impl App {
-    pub(crate) fn view_setup(&self) -> Element<'_, Message> {
-        let mut form = column![
-            text("Veil").size(48),
-            text("Encrypted. Decentralized. Yours.").size(16),
-        ]
-        .spacing(20)
-        .align_x(iced::Alignment::Center);
+impl VeilApp {
+    pub(crate) fn draw_setup(&mut self, ui: &mut Ui) {
+        let max_w = 400.0;
+        ui.center_horizontal(max_w, |ui| {
+            let top_pad = (self.height as f32 * 0.25).max(40.0);
+            ui.spacing(top_pad);
 
-        // Username input
-        form = form.push(
-            text_input("Choose a username", &self.username_input)
-                .on_input(Message::UsernameInputChanged)
-                .padding(8)
-                .width(300),
-        );
+            ui.max_width(max_w, |ui| {
+                ui.heading("Veil");
+                ui.spacing(4.0);
+                ui.muted_label("Encrypted. Decentralized. Yours.");
+                ui.spacing(20.0);
 
-        // Password input
-        form = form.push(
-            text_input("Password (optional)", &self.passphrase_input)
-                .on_input(Message::PassphraseChanged)
-                .secure(true)
-                .padding(8)
-                .width(300),
-        );
+                // Username input
+                ui.text_input(id!("setup_username"), &mut self.input_username, "Choose a username");
+                ui.spacing(8.0);
 
-        // Create / Sign In buttons
-        form = form.push(
-            row![
-                button("Create Account")
-                    .on_press(Message::CreateIdentity)
-                    .padding(12),
-                button("Sign In")
-                    .on_press(Message::LoadIdentity)
-                    .padding(12),
-            ]
-            .spacing(12),
-        );
+                // Password input (plaintext for now — TODO: add secure mode to esox_ui)
+                ui.text_input(id!("setup_passphrase"), &mut self.input_passphrase, "Password (optional)");
+                ui.spacing(12.0);
 
-        // Status/error feedback
-        if let Some(ref status) = self.registration_status {
-            form = form.push(text(status.as_str()).size(13));
-        }
+                // Create / Sign In buttons
+                ui.row_spaced(12.0, |ui| {
+                    if ui.button(id!("setup_create"), "Create Account").clicked {
+                        self.sync_inputs_to_app();
+                        self.app.update_create_identity();
+                        self.sync_app_to_inputs();
+                    }
+                    if ui.button(id!("setup_signin"), "Sign In").clicked {
+                        self.sync_inputs_to_app();
+                        self.app.update_load_identity();
+                        self.sync_app_to_inputs();
+                    }
+                });
+                ui.spacing(8.0);
 
-        // Connection state
-        let state_str = self.connection_state.to_string();
-        if state_str != "Disconnected" {
-            form = form.push(text(state_str).size(12));
-        }
+                // Status/error feedback
+                if let Some(ref status) = self.app.registration_status {
+                    ui.muted_label(status);
+                    ui.spacing(4.0);
+                }
 
-        // Advanced: relay address (collapsed by default, but show the input)
-        form = form.push(
-            column![
-                text("Relay server").size(11),
-                text_input("relay host:port", &self.relay_addr_input)
-                    .on_input(Message::RelayAddrChanged)
-                    .padding(6)
-                    .width(300),
-            ]
-            .spacing(4),
-        );
+                // Connection state
+                let state_str = self.app.connection_state.to_string();
+                if state_str != "Disconnected" {
+                    ui.muted_label(&state_str);
+                    ui.spacing(4.0);
+                }
 
-        container(form)
-            .center(Length::Fill)
-            .into()
+                // Relay address
+                ui.spacing(12.0);
+                ui.header_label("Relay server");
+                ui.spacing(4.0);
+                ui.text_input(id!("setup_relay"), &mut self.input_relay_addr, "relay host:port");
+            });
+        });
     }
 
-    pub(crate) fn view_recovery_phrase(&self, phrase: &str) -> Element<'_, Message> {
-        let words: Vec<&str> = phrase.split_whitespace().collect();
-        let mut word_rows = Column::new().spacing(8);
-        for (i, word) in words.iter().enumerate() {
-            word_rows = word_rows.push(text(format!("{}. {}", i + 1, word)).size(18));
-        }
+    pub(crate) fn draw_recovery_phrase(&mut self, ui: &mut Ui, phrase: &str) {
+        let max_w = 500.0;
+        ui.center_horizontal(max_w, |ui| {
+            let top_pad = (self.height as f32 * 0.15).max(40.0);
+            ui.spacing(top_pad);
 
-        container(
-            column![
-                text("Your Recovery Phrase").size(32),
-                text("Write these 12 words down and store them safely.").size(14),
-                text("You will need them to recover your identity.").size(14),
-                container(word_rows.padding(16)).padding(16),
-                button("I have saved my recovery phrase")
-                    .on_press(Message::ConfirmRecoveryPhrase)
-                    .padding(12),
-            ]
-            .spacing(20)
-            .align_x(iced::Alignment::Center),
-        )
-        .center(Length::Fill)
-        .into()
+            ui.max_width(max_w, |ui| {
+                ui.heading("Your Recovery Phrase");
+                ui.spacing(8.0);
+                ui.label("Write these 12 words down and store them safely.");
+                ui.label("You will need them to recover your identity.");
+                ui.spacing(16.0);
+
+                let words: Vec<&str> = phrase.split_whitespace().collect();
+                for (i, word) in words.iter().enumerate() {
+                    ui.label(&format!("{}. {}", i + 1, word));
+                    ui.spacing(4.0);
+                }
+
+                ui.spacing(16.0);
+                if ui.button(id!("confirm_phrase"), "I have saved my recovery phrase").clicked {
+                    self.sync_inputs_to_app();
+                    self.app.update_confirm_recovery_phrase();
+                    self.sync_app_to_inputs();
+                    self.maybe_spawn_network();
+                }
+            });
+        });
     }
 }

@@ -4,15 +4,10 @@ use veil_core::BlobId;
 use veil_net::ConnectionId;
 
 use crate::ui::app::App;
-use crate::ui::message::{Message, NetCommand};
+use crate::ui::message::NetCommand;
 use crate::ui::types::*;
 
 impl App {
-    pub(crate) fn update_pick_file(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().pick_file() {
-            self.update(Message::SendFile(path));
-        }
-    }
 
     pub(crate) fn update_send_file(&mut self, path: std::path::PathBuf) {
         if let Some(ref group) = self.current_group {

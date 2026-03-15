@@ -1,13 +1,15 @@
-use iced::Element;
-use iced::widget::row;
+use esox_ui::Ui;
 
-use crate::ui::app::App;
-use crate::ui::message::Message;
+use crate::ui::app::VeilApp;
 
-impl App {
-    pub(crate) fn view_chat(&self) -> Element<'_, Message> {
-        let sidebar = self.view_sidebar();
-        let chat = self.view_messages();
-        row![sidebar, chat].into()
+impl VeilApp {
+    pub(crate) fn draw_chat(&mut self, ui: &mut Ui) {
+        ui.columns_spaced(0.0, &[0.2, 0.8], |ui, col| {
+            match col {
+                0 => self.draw_sidebar(ui),
+                1 => self.draw_messages(ui),
+                _ => {}
+            }
+        });
     }
 }
