@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use veil_core::routing_tag_for_group;
-use veil_crypto::{GroupKey, GroupKeyRing, dm};
+use veil_crypto::{GroupKey, GroupKeyRing, PeerId, dm};
 
 use crate::ui::app::App;
 use crate::ui::message::NetCommand;
@@ -126,6 +126,10 @@ impl App {
             id: veil_core::GroupId(dm_group_id),
             key_ring: Arc::new(std::sync::Mutex::new(keyring)),
             device_certs: Vec::new(),
+            members: vec![
+                self.master_peer_id(),
+                PeerId { verifying_key: public_key.to_vec() },
+            ],
         };
 
         self.groups.push(group_state.clone());

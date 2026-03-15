@@ -61,6 +61,9 @@ pub(crate) struct GroupState {
     pub(crate) id: GroupId,
     pub(crate) key_ring: Arc<std::sync::Mutex<GroupKeyRing>>,
     pub(crate) device_certs: Vec<DeviceCertificate>,
+    /// Known group members (master PeerIds) for signature verification.
+    /// Populated from MemberAdded control messages and invite acceptance.
+    pub(crate) members: Vec<PeerId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

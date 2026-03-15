@@ -116,6 +116,19 @@ impl App {
                 display_name,
                 invited_by,
             } => {
+                // Store the member's public key in the current group for signature verification
+                if let Some(ref mut group) = self.current_group {
+                    if !group.members.iter().any(|m| m.verifying_key == member_id.verifying_key) {
+                        group.members.push(member_id.clone());
+                    }
+                }
+                // Also update the group in the groups list
+                for group in &mut self.groups {
+                    if !group.members.iter().any(|m| m.verifying_key == member_id.verifying_key) {
+                        group.members.push(member_id.clone());
+                    }
+                }
+
                 // Store the display name from the control message
                 let fp = member_id.fingerprint();
                 if !display_name.is_empty() {

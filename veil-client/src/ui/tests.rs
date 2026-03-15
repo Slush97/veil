@@ -23,6 +23,7 @@ fn test_app() -> (App, mpsc::Receiver<NetCommand>) {
         id: GroupId(group_id_bytes),
         key_ring: Arc::new(std::sync::Mutex::new(keyring)),
         device_certs: Vec::new(),
+        members: Vec::new(),
     };
 
     let tmp = tempfile::NamedTempFile::new().expect("temp file");

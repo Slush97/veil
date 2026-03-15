@@ -64,6 +64,7 @@ impl App {
             id: group_id,
             key_ring: Arc::new(std::sync::Mutex::new(keyring)),
             device_certs: Vec::new(),
+            members: Vec::new(),
         };
 
         // Persist the new group as v2

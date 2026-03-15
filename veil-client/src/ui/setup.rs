@@ -41,6 +41,7 @@ impl App {
                             id: veil_core::GroupId(id),
                             key_ring: Arc::new(std::sync::Mutex::new(keyring)),
                             device_certs: Vec::new(),
+                            members: Vec::new(),
                         })
                         .collect();
                     true
@@ -65,6 +66,7 @@ impl App {
                                     id: veil_core::GroupId(id),
                                     key_ring: Arc::new(std::sync::Mutex::new(keyring)),
                                     device_certs: Vec::new(),
+                                    members: Vec::new(),
                                 }
                             })
                             .collect();
@@ -105,6 +107,7 @@ impl App {
                 id: veil_core::GroupId(group_id_bytes),
                 key_ring: Arc::new(std::sync::Mutex::new(keyring)),
                 device_certs: Vec::new(),
+                members: Vec::new(),
             };
 
             self.groups = vec![group_state.clone()];
@@ -165,7 +168,12 @@ impl App {
         let routing_tag = routing_tag_for_group(&group.id.0);
         match store.list_messages_by_tag(&routing_tag, limit, 0) {
             Ok(sealed_messages) => {
-                let members = self.known_master_ids();
+                let mut members = self.known_master_ids();
+                for m in &group.members {
+                    if !members.iter().any(|existing| existing.verifying_key == m.verifying_key) {
+                        members.push(m.clone());
+                    }
+                }
                 let ring = match group.key_ring.lock() {
                     Ok(r) => r,
                     Err(e) => {

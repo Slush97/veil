@@ -87,6 +87,7 @@ impl App {
             id: GroupId(group_id_bytes),
             key_ring: Arc::new(std::sync::Mutex::new(keyring)),
             device_certs,
+            members: vec![self.master_peer_id(), peer_id.clone()],
         };
 
         self.groups.push(group_state.clone());
@@ -100,13 +101,20 @@ impl App {
     pub(crate) fn update_peer_data(&mut self, sealed: SealedMessage) {
         // Try all groups to find the one that can decrypt
         let mut decrypted = false;
-        let members = self.known_master_ids();
+        let global_members = self.known_master_ids();
 
         for group in &self.groups {
             let Ok(ring) = group.key_ring.lock() else {
                 tracing::error!("key ring lock poisoned");
                 continue;
             };
+            // Merge global known members with this group's member list
+            let mut members = global_members.clone();
+            for m in &group.members {
+                if !members.iter().any(|existing| existing.verifying_key == m.verifying_key) {
+                    members.push(m.clone());
+                }
+            }
             if let Ok((content, sender)) =
                 sealed.verify_and_open_with_keyring(&ring, &members, &group.device_certs)
             {
