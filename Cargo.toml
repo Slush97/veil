@@ -47,11 +47,11 @@ bincode = "1"
 # Erasure coding
 reed-solomon-erasure = "6"
 
-# UI (esox toolkit via git)
-esox_gfx = { git = "https://github.com/Slush97/aaplsucks.git", branch = "master" }
-esox_font = { git = "https://github.com/Slush97/aaplsucks.git", branch = "master" }
-esox_ui = { git = "https://github.com/Slush97/aaplsucks.git", branch = "master" }
-esox_platform = { git = "https://github.com/Slush97/aaplsucks.git", branch = "master" }
+# UI (esox toolkit — local workspace)
+esox_gfx = { path = "../esox/crates/esox_gfx" }
+esox_font = { path = "../esox/crates/esox_font" }
+esox_ui = { path = "../esox/crates/esox_ui" }
+esox_platform = { path = "../esox/crates/esox_platform" }
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 
 # LRU cache
