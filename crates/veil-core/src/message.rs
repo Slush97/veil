@@ -274,6 +274,22 @@ impl Default for ChannelId {
     }
 }
 
+/// Category within a group — organizes channels under collapsible headings.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CategoryId(pub Uuid);
+
+impl CategoryId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for CategoryId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

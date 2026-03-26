@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use veil_crypto::{DeviceCertificate, DeviceRevocation, EpochReason, KeyEpoch, KeyPackage, PeerId};
 
-use crate::group::Role;
+use crate::group::{Role, role_level};
 
 /// A control message that modifies group state.
 ///
@@ -61,6 +61,13 @@ pub enum ControlMessage {
         removed_by: PeerId,
     },
 
+    /// A member's role was changed.
+    RoleChanged {
+        member_id: PeerId,
+        new_role: Role,
+        changed_by: PeerId,
+    },
+
     /// Group metadata was updated (name, description, etc.).
     MetadataUpdate { field: MetadataField, value: String },
 }
@@ -71,7 +78,10 @@ pub enum MetadataField {
     GroupName,
     GroupDescription,
     ChannelAdded { name: String, kind: String },
-    ChannelRemoved { name: String },
+    ChannelRemoved { channel_id: String },
+    CategoryAdded { name: String },
+    CategoryRemoved { category_id: String },
+    ChannelMoved { channel_id: String, category_id: Option<String> },
 }
 
 /// Minimum role required to perform each control operation.
@@ -91,6 +101,8 @@ impl ControlMessage {
             // Only admins+ can manage membership
             ControlMessage::MemberAdded { .. } => Role::Admin,
             ControlMessage::MemberRemoved { .. } => Role::Admin,
+            // Only admins+ can change roles (further checks needed: can't promote above own level)
+            ControlMessage::RoleChanged { .. } => Role::Admin,
             // Only admins+ can change metadata
             ControlMessage::MetadataUpdate { .. } => Role::Admin,
         }
@@ -121,15 +133,6 @@ impl ControlMessage {
     }
 }
 
-/// Map roles to numeric levels for comparison.
-fn role_level(role: &Role) -> u8 {
-    match role {
-        Role::Owner => 2,
-        Role::Admin => 1,
-        Role::Member => 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +150,7 @@ mod tests {
         };
         assert!(member_added.is_authorized(&Role::Owner));
         assert!(member_added.is_authorized(&Role::Admin));
+        assert!(!member_added.is_authorized(&Role::Moderator));
         assert!(!member_added.is_authorized(&Role::Member));
     }
 
