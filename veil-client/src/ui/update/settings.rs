@@ -28,9 +28,10 @@ impl App {
                 } else {
                     "false"
                 },
-            ) {
-                tracing::warn!("failed to persist notifications: {e}");
-            }
+            )
+        {
+            tracing::warn!("failed to persist notifications: {e}");
+        }
     }
 
     pub(crate) fn update_export_identity(&mut self) {

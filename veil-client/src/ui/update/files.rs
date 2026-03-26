@@ -8,7 +8,6 @@ use crate::ui::message::NetCommand;
 use crate::ui::types::*;
 
 impl App {
-
     pub(crate) fn update_send_file(&mut self, path: std::path::PathBuf) {
         if let Some(ref group) = self.current_group {
             let Some(device) = self.device.as_ref() else {
@@ -29,9 +28,10 @@ impl App {
                     group_key,
                     store: store.clone(),
                     identity_bytes: device.device_key_bytes(),
-                }) {
-                    tracing::warn!("failed to send file command: {e}");
-                }
+                })
+            {
+                tracing::warn!("failed to send file command: {e}");
+            }
         }
     }
 
@@ -67,9 +67,10 @@ impl App {
                 conn_id,
                 blob_id,
                 data,
-            }) {
-                tracing::warn!("failed to send blob response: {e}");
-            }
+            })
+        {
+            tracing::warn!("failed to send blob response: {e}");
+        }
     }
 
     pub(crate) fn update_blob_received(&mut self, blob_id: BlobId) {

@@ -260,11 +260,7 @@ fn verify_subscribe_signature(
 }
 
 /// Verify an Ed25519 signature for username registration.
-fn verify_register_signature(
-    public_key: &[u8; 32],
-    message: &[u8],
-    signature: &[u8],
-) -> bool {
+fn verify_register_signature(public_key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
     let Ok(vk) = VerifyingKey::from_bytes(public_key) else {
         return false;
     };

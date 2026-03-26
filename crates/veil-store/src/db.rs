@@ -1017,7 +1017,11 @@ mod tests {
 
         let contacts = store.list_contacts().unwrap();
         assert_eq!(contacts.len(), 2);
-        assert!(contacts.iter().any(|(n, k)| n == "alice" && *k == [10u8; 32]));
+        assert!(
+            contacts
+                .iter()
+                .any(|(n, k)| n == "alice" && *k == [10u8; 32])
+        );
         assert!(contacts.iter().any(|(n, k)| n == "bob" && *k == [20u8; 32]));
 
         store.remove_contact("alice").unwrap();

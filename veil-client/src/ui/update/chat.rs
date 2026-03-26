@@ -23,9 +23,10 @@ impl App {
             }
         });
         if let (Some(wire_msg), Some(tx)) = (presence, &mut self.net_cmd_tx)
-            && let Err(e) = tx.try_send(NetCommand::SendPresence(wire_msg)) {
-                tracing::warn!("failed to send typing indicator: {e}");
-            }
+            && let Err(e) = tx.try_send(NetCommand::SendPresence(wire_msg))
+        {
+            tracing::warn!("failed to send typing indicator: {e}");
+        }
         self.message_input = value;
     }
 
@@ -98,10 +99,10 @@ impl App {
                         .messages
                         .iter()
                         .find(|m| m.id.as_ref() == Some(&parent_id))
-                    {
-                        cm.reply_to_content = Some(parent.content.clone());
-                        cm.reply_to_sender = Some(parent.sender.clone());
-                    }
+                {
+                    cm.reply_to_content = Some(parent.content.clone());
+                    cm.reply_to_sender = Some(parent.sender.clone());
+                }
 
                 self.messages.push(cm);
 
@@ -129,9 +130,10 @@ impl App {
         if let Ok(addr) = self.connect_input.parse::<SocketAddr>() {
             self.connection_state = ConnectionState::Connecting(format!("Connecting to {addr}..."));
             if let Some(ref mut tx) = self.net_cmd_tx
-                && let Err(e) = tx.try_send(NetCommand::Connect(addr)) {
-                    tracing::warn!("failed to send connect command: {e}");
-                }
+                && let Err(e) = tx.try_send(NetCommand::Connect(addr))
+            {
+                tracing::warn!("failed to send connect command: {e}");
+            }
         } else {
             self.connection_state =
                 ConnectionState::Failed("Invalid address (use host:port)".into());
@@ -182,20 +184,17 @@ impl App {
         if idx < self.messages.len() {
             let is_own = self.messages[idx].sender_id.as_ref() == Some(&self.master_peer_id());
             let msg_id = self.messages[idx].id.clone();
-            if is_own
-                && let Some(msg_id) = msg_id {
-                    let content = MessageContent {
-                        kind: MessageKind::Delete {
-                            target_id: msg_id,
-                        },
-                        timestamp: chrono::Utc::now(),
-                        channel_id: ChannelId::new(),
-                    };
-                    if self.seal_send_persist(&content).is_some() {
-                        self.messages[idx].deleted = true;
-                        self.messages[idx].content = "[deleted]".into();
-                    }
+            if is_own && let Some(msg_id) = msg_id {
+                let content = MessageContent {
+                    kind: MessageKind::Delete { target_id: msg_id },
+                    timestamp: chrono::Utc::now(),
+                    channel_id: ChannelId::new(),
+                };
+                if self.seal_send_persist(&content).is_some() {
+                    self.messages[idx].deleted = true;
+                    self.messages[idx].content = "[deleted]".into();
                 }
+            }
         }
     }
 }

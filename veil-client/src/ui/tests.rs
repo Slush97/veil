@@ -366,7 +366,10 @@ fn set_display_name_persists() {
     app.display_name_input = "Alice".into();
     app.update_set_display_name();
 
-    assert_eq!(app.display_names.get(&fp).map(String::as_str), Some("Alice"));
+    assert_eq!(
+        app.display_names.get(&fp).map(String::as_str),
+        Some("Alice")
+    );
     assert!(app.display_name_input.is_empty());
 
     let store = app.store.as_ref().unwrap();

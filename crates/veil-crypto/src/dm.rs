@@ -64,18 +64,11 @@ pub fn verification_code(key_a: &[u8; 32], key_b: &[u8; 32]) -> String {
     let code_bytes = &hash[..6];
     let hex_str = hex::encode(code_bytes);
     // Format as groups of 4 for readability: "ab12 cd34 ef56"
-    format!(
-        "{} {} {}",
-        &hex_str[0..4],
-        &hex_str[4..8],
-        &hex_str[8..12]
-    )
+    format!("{} {} {}", &hex_str[0..4], &hex_str[4..8], &hex_str[8..12])
 }
 
 /// Convert an Ed25519 signing key to an X25519 static secret.
-fn signing_key_to_x25519_secret(
-    signing_key: &SigningKey,
-) -> x25519_dalek::StaticSecret {
+fn signing_key_to_x25519_secret(signing_key: &SigningKey) -> x25519_dalek::StaticSecret {
     use sha2::Digest;
     let mut hasher = sha2::Sha512::new();
     hasher.update(signing_key.as_bytes());

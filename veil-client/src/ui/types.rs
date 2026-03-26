@@ -153,7 +153,10 @@ impl ChatMessage {
 /// Result of a contact search (username lookup).
 #[derive(Clone, Debug)]
 pub(crate) enum ContactSearchResult {
-    Found { username: String, public_key: [u8; 32] },
+    Found {
+        username: String,
+        public_key: [u8; 32],
+    },
     NotFound(String),
     Searching,
 }

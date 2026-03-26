@@ -98,9 +98,10 @@ impl App {
 
             // Persist the default group
             if let Some(ref store) = self.store
-                && let Err(e) = store.store_group_v2(&group_id_bytes, "My Group", &keyring) {
-                    tracing::warn!("failed to persist default group: {e}");
-                }
+                && let Err(e) = store.store_group_v2(&group_id_bytes, "My Group", &keyring)
+            {
+                tracing::warn!("failed to persist default group: {e}");
+            }
 
             let group_state = GroupState {
                 name: "My Group".into(),
@@ -170,7 +171,10 @@ impl App {
             Ok(sealed_messages) => {
                 let mut members = self.known_master_ids();
                 for m in &group.members {
-                    if !members.iter().any(|existing| existing.verifying_key == m.verifying_key) {
+                    if !members
+                        .iter()
+                        .any(|existing| existing.verifying_key == m.verifying_key)
+                    {
                         members.push(m.clone());
                     }
                 }

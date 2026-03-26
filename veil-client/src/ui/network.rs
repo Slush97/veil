@@ -14,7 +14,7 @@ use veil_net::{
 };
 use veil_store::LocalStore;
 
-use super::message::{NetworkEvent, NetCommand};
+use super::message::{NetCommand, NetworkEvent};
 use super::types::SharedGroupKey;
 
 pub(crate) fn veil_data_dir() -> std::path::PathBuf {

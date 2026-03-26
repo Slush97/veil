@@ -120,8 +120,14 @@ pub enum NetworkEvent {
         message: String,
     },
     // Username registry + contacts
-    RegisterResult { success: bool, message: String },
-    ContactFound { username: String, public_key: [u8; 32] },
+    RegisterResult {
+        success: bool,
+        message: String,
+    },
+    ContactFound {
+        username: String,
+        public_key: [u8; 32],
+    },
     ContactNotFound(String),
     // LAN discovery
     LanPeerDiscovered {

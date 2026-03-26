@@ -23,9 +23,10 @@ impl App {
         let pending: Vec<SealedMessage> = self.pending_messages.drain(..).collect();
         for sealed in pending {
             if let Some(ref mut tx) = self.net_cmd_tx
-                && let Err(e) = tx.try_send(NetCommand::SendMessage(sealed)) {
-                    tracing::warn!("failed to flush pending message: {e}");
-                }
+                && let Err(e) = tx.try_send(NetCommand::SendMessage(sealed))
+            {
+                tracing::warn!("failed to flush pending message: {e}");
+            }
         }
         // Update status of pending messages to Sent
         for msg in &mut self.messages {
@@ -38,9 +39,10 @@ impl App {
         if !self.relay_addr_input.is_empty()
             && let Ok(addr) = self.relay_addr_input.parse::<SocketAddr>()
             && let Some(ref mut tx) = self.net_cmd_tx
-            && let Err(e) = tx.try_send(NetCommand::ConnectRelay(addr)) {
-                tracing::warn!("failed to auto-reconnect relay: {e}");
-            }
+            && let Err(e) = tx.try_send(NetCommand::ConnectRelay(addr))
+        {
+            tracing::warn!("failed to auto-reconnect relay: {e}");
+        }
     }
 
     pub(crate) fn update_peer_connected(
@@ -76,9 +78,10 @@ impl App {
         {
             // Store peer's device cert
             if let Some(ref store) = self.store
-                && let Err(e) = store.store_device_cert(&cert.device_id, &cert) {
-                    tracing::warn!("failed to persist device cert: {e}");
-                }
+                && let Err(e) = store.store_device_cert(&cert.device_id, &cert)
+            {
+                tracing::warn!("failed to persist device cert: {e}");
+            }
             device_certs.push(cert);
         }
 
@@ -111,7 +114,10 @@ impl App {
             // Merge global known members with this group's member list
             let mut members = global_members.clone();
             for m in &group.members {
-                if !members.iter().any(|existing| existing.verifying_key == m.verifying_key) {
+                if !members
+                    .iter()
+                    .any(|existing| existing.verifying_key == m.verifying_key)
+                {
                     members.push(m.clone());
                 }
             }
@@ -287,9 +293,10 @@ impl App {
                                     if let Some(ref mut tx) = self.net_cmd_tx
                                         && let Err(e) = tx.try_send(NetCommand::RequestBlob {
                                             blob_id: blob_id.clone(),
-                                        }) {
-                                            tracing::warn!("failed to request blob: {e}");
-                                        }
+                                        })
+                                    {
+                                        tracing::warn!("failed to request blob: {e}");
+                                    }
                                     FileStatus::Downloading
                                 }
                             }

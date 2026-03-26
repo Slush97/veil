@@ -98,7 +98,10 @@ impl DirectoryStore {
     }
 
     /// Look up a public key by username.
-    pub fn lookup(&self, username: &str) -> Result<Option<[u8; 32]>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn lookup(
+        &self,
+        username: &str,
+    ) -> Result<Option<[u8; 32]>, Box<dyn std::error::Error + Send + Sync>> {
         let username_lower = username.to_lowercase();
         let rtxn = self.db.begin_read()?;
         let user_table = rtxn.open_table(USERNAMES)?;
@@ -216,9 +219,7 @@ mod tests {
             RegisterOutcome::Success
         );
         assert_eq!(
-            store
-                .register("a".repeat(20).as_str(), &[9u8; 32])
-                .unwrap(),
+            store.register("a".repeat(20).as_str(), &[9u8; 32]).unwrap(),
             RegisterOutcome::Success
         );
     }
