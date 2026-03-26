@@ -2,18 +2,17 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use esox_gfx::{GpuContext, RenderResources};
-use esox_ui::{InputState, Rect, UiState, Ui, TextRenderer};
-use esox_platform::{AppDelegate, MouseInputEvent};
-use winit::event::KeyEvent;
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use esox_gfx::{Color, Frame, GpuContext, QuadInstance, RenderResources};
+use esox_platform::esox_input::{self, CursorIcon, Modifiers};
+use esox_platform::{AppDelegate, Clipboard, MouseInputEvent};
+use esox_ui::{ClipboardProvider, InputState, Rect, TabState, TextRenderer, ThemeBuilder, Ui, UiState};
 
 use veil_core::{ChannelId, GroupId, SealedMessage};
 use veil_crypto::{DeviceIdentity, MasterIdentity, PeerId};
 use veil_net::ConnectionId;
 use veil_store::LocalStore;
 
-use super::message::{NetworkEvent, NetCommand};
+use super::message::{NetCommand, NetworkEvent};
 use super::network::spawn_network_worker;
 use super::types::*;
 
@@ -137,6 +136,63 @@ impl Default for App {
 /// Default relay address.
 pub(crate) const DEFAULT_RELAY: &str = "127.0.0.1:4433";
 
+// ─── Veil themes ────────────────────────────────────────────────────────────
+
+/// Teal accent — reads as "secure", distinct from generic corporate blue.
+const VEIL_TEAL: Color = Color::new(0.357, 0.643, 0.710, 1.0); // #5BA4B5
+const VEIL_TEAL_DIM: Color = Color::new(0.357, 0.643, 0.710, 0.15);
+const VEIL_TEAL_HOVER: Color = Color::new(0.447, 0.718, 0.780, 1.0); // #72B7C7
+
+fn veil_dark() -> esox_ui::Theme {
+    let mut t = ThemeBuilder::from_dark()
+        // Slightly blue-shifted charcoal — not pure neutral gray.
+        .bg_base(Color::new(0.055, 0.063, 0.075, 1.0))     // #0e1013
+        .bg_surface(Color::new(0.078, 0.090, 0.106, 1.0))   // #14171b
+        .bg_raised(Color::new(0.110, 0.125, 0.145, 1.0))    // #1c2025
+        .bg_input(Color::new(0.137, 0.153, 0.176, 1.0))     // #23272d
+        // Warm off-white for readability.
+        .fg(Color::new(0.906, 0.914, 0.929, 1.0))           // #e7e9ed
+        .fg_muted(Color::new(0.545, 0.569, 0.612, 1.0))     // #8b919c
+        .fg_dim(Color::new(0.380, 0.400, 0.440, 1.0))       // #616670
+        .fg_label(Color::new(0.730, 0.745, 0.773, 1.0))     // #babec5
+        // Teal accent.
+        .accent(VEIL_TEAL)
+        .accent_dim(VEIL_TEAL_DIM)
+        .accent_hover(VEIL_TEAL_HOVER)
+        // Muted status colors — not neon.
+        .green(Color::new(0.302, 0.745, 0.467, 1.0))        // #4dbe77
+        .amber(Color::new(0.890, 0.698, 0.255, 1.0))        // #e3b241
+        .red(Color::new(0.878, 0.396, 0.384, 1.0))          // #e06562
+        .border(Color::new(0.165, 0.184, 0.212, 1.0))       // #2a2f36
+        .corner_radius(6.0)
+        .build();
+    t.secondary_button_bg = Color::new(0.137, 0.153, 0.176, 1.0);
+    t.secondary_button_hover = Color::new(0.180, 0.200, 0.228, 1.0);
+    t
+}
+
+#[allow(clippy::approx_constant)] // these are sRGB color values, not math constants
+fn veil_light() -> esox_ui::Theme {
+    ThemeBuilder::from_light()
+        .bg_base(Color::new(0.976, 0.980, 0.988, 1.0))     // #f9fafc
+        .bg_surface(Color::new(0.945, 0.953, 0.965, 1.0))   // #f1f3f7
+        .bg_raised(Color::new(0.918, 0.925, 0.941, 1.0))    // #eaecf0
+        .bg_input(Color::new(1.0, 1.0, 1.0, 1.0))
+        .fg(Color::new(0.094, 0.106, 0.133, 1.0))           // #181b22
+        .fg_muted(Color::new(0.345, 0.365, 0.408, 1.0))     // #585d68
+        .fg_dim(Color::new(0.435, 0.455, 0.498, 1.0))       // #6f747f
+        .fg_label(Color::new(0.243, 0.259, 0.298, 1.0))     // #3e424c
+        .accent(Color::new(0.263, 0.549, 0.620, 1.0))       // #438c9e
+        .accent_dim(Color::new(0.263, 0.549, 0.620, 0.12))
+        .accent_hover(Color::new(0.318, 0.612, 0.682, 1.0)) // #519cae
+        .green(Color::new(0.180, 0.620, 0.337, 1.0))
+        .amber(Color::new(0.745, 0.510, 0.110, 1.0))
+        .red(Color::new(0.780, 0.255, 0.243, 1.0))
+        .border(Color::new(0.827, 0.839, 0.863, 1.0))       // #d3d6dc
+        .corner_radius(6.0)
+        .build()
+}
+
 impl App {
     /// Convenience: get the master PeerId.
     /// # Panics
@@ -229,13 +285,15 @@ impl App {
         };
         drop(ring);
         if let Some(ref tx) = self.net_cmd_tx
-            && let Err(e) = tx.try_send(super::message::NetCommand::SendMessage(sealed.clone())) {
-                tracing::warn!("failed to send message: {e}");
-            }
+            && let Err(e) = tx.try_send(super::message::NetCommand::SendMessage(sealed.clone()))
+        {
+            tracing::warn!("failed to send message: {e}");
+        }
         if let Some(ref store) = self.store
-            && let Err(e) = store.store_message(&sealed) {
-                tracing::warn!("failed to persist message: {e}");
-            }
+            && let Err(e) = store.store_message(&sealed)
+        {
+            tracing::warn!("failed to persist message: {e}");
+        }
         Some(sealed)
     }
 
@@ -259,7 +317,12 @@ impl App {
             NetworkEvent::NetworkReady { local_addr, cmd_tx } => {
                 self.update_network_ready(local_addr, cmd_tx);
             }
-            NetworkEvent::PeerConnected { conn_id, peer_id, session_key, device_certificate } => {
+            NetworkEvent::PeerConnected {
+                conn_id,
+                peer_id,
+                session_key,
+                device_certificate,
+            } => {
                 self.update_peer_connected(conn_id, peer_id, session_key, device_certificate);
             }
             NetworkEvent::PeerDisconnected { conn_id } => {
@@ -280,7 +343,11 @@ impl App {
             NetworkEvent::InviteCreated(url) => {
                 self.generated_invite_url = Some(url);
             }
-            NetworkEvent::InviteAccepted { group_name, group_id, group_key } => {
+            NetworkEvent::InviteAccepted {
+                group_name,
+                group_id,
+                group_key,
+            } => {
                 self.update_invite_accepted(group_name, group_id, group_key);
             }
             NetworkEvent::InviteFailed(err) => {
@@ -304,7 +371,10 @@ impl App {
             NetworkEvent::RegisterResult { success, message } => {
                 self.update_register_result(success, message);
             }
-            NetworkEvent::ContactFound { username, public_key } => {
+            NetworkEvent::ContactFound {
+                username,
+                public_key,
+            } => {
                 self.update_contact_found(username, public_key);
             }
             NetworkEvent::ContactNotFound(username) => {
@@ -312,7 +382,11 @@ impl App {
             }
 
             // LAN discovery
-            NetworkEvent::LanPeerDiscovered { name, addr, fingerprint } => {
+            NetworkEvent::LanPeerDiscovered {
+                name,
+                addr,
+                fingerprint,
+            } => {
                 self.update_lan_peer_discovered(name, addr, fingerprint);
             }
             NetworkEvent::LanPeerLost(name) => {
@@ -324,17 +398,32 @@ impl App {
 
 // ─── VeilApp: wraps App with esox_ui state + tokio runtime ───
 
+// ─── Clipboard bridge ───────────────────────────────────────────────────────
+
+struct PlatformClipboard;
+
+impl ClipboardProvider for PlatformClipboard {
+    fn read_text(&self) -> Option<String> {
+        Clipboard::read(0).ok()
+    }
+    fn write_text(&self, text: &str) {
+        let _ = Clipboard::write(text);
+    }
+}
+
+// ─── VeilApp ────────────────────────────────────────────────────────────────
+
 pub struct VeilApp {
     pub(crate) app: App,
     pub(crate) ui_state: UiState,
     pub(crate) text_renderer: Option<TextRenderer>,
     pub(crate) theme: esox_ui::Theme,
+    pub(crate) pending_clear: Option<[f32; 4]>,
     pub(crate) tokio_rt: tokio::runtime::Runtime,
     pub(crate) net_event_rx: Option<tokio::sync::mpsc::Receiver<NetworkEvent>>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) network_spawned: bool,
-    // File picker result channel
     pub(crate) file_pick_rx: Option<std::sync::mpsc::Receiver<std::path::PathBuf>>,
 
     // Input states for each text field
@@ -349,6 +438,7 @@ pub struct VeilApp {
     pub(crate) input_search: InputState,
     pub(crate) input_contact_search: InputState,
     pub(crate) input_device_name: InputState,
+    pub(crate) settings_tab: TabState,
 }
 
 impl VeilApp {
@@ -358,11 +448,18 @@ impl VeilApp {
             .build()
             .expect("failed to create tokio runtime");
 
+        let theme = veil_dark();
+        let bg = theme.bg_base;
+
+        let mut ui_state = UiState::new();
+        ui_state.clipboard = Some(Box::new(PlatformClipboard));
+
         Self {
             app: App::default(),
-            ui_state: UiState::new(),
+            ui_state,
             text_renderer: None,
-            theme: esox_ui::Theme::dark(),
+            pending_clear: Some([bg.r, bg.g, bg.b, bg.a]),
+            theme,
             tokio_rt,
             net_event_rx: None,
             width: 1200,
@@ -380,6 +477,7 @@ impl VeilApp {
             input_search: InputState::default(),
             input_contact_search: InputState::default(),
             input_device_name: InputState::default(),
+            settings_tab: TabState::default(),
         }
     }
 
@@ -455,11 +553,17 @@ impl VeilApp {
         sync_field(&mut self.input_message, &self.app.message_input);
         sync_field(&mut self.input_connect, &self.app.connect_input);
         sync_field(&mut self.input_relay_addr, &self.app.relay_addr_input);
-        sync_field(&mut self.input_invite_passphrase, &self.app.invite_passphrase);
+        sync_field(
+            &mut self.input_invite_passphrase,
+            &self.app.invite_passphrase,
+        );
         sync_field(&mut self.input_invite_url, &self.app.invite_input);
         sync_field(&mut self.input_display_name, &self.app.display_name_input);
         sync_field(&mut self.input_search, &self.app.search_query);
-        sync_field(&mut self.input_contact_search, &self.app.contact_search_input);
+        sync_field(
+            &mut self.input_contact_search,
+            &self.app.contact_search_input,
+        );
         sync_field(&mut self.input_device_name, &self.app.device_name_input);
     }
 
@@ -486,14 +590,17 @@ fn sync_field(input_state: &mut InputState, app_string: &str) {
 
 impl AppDelegate for VeilApp {
     fn on_init(&mut self, gpu: &GpuContext, _resources: &mut RenderResources) {
-        self.text_renderer = TextRenderer::new(gpu).ok();
+        match TextRenderer::new(gpu) {
+            Ok(tr) => self.text_renderer = Some(tr),
+            Err(e) => eprintln!("failed to initialize text renderer: {e}"),
+        }
     }
 
     fn on_redraw(
         &mut self,
         gpu: &GpuContext,
         resources: &mut RenderResources,
-        frame: &mut esox_gfx::Frame,
+        frame: &mut Frame,
         _perf: &esox_platform::perf::PerfMonitor,
     ) {
         // Drain async events
@@ -503,9 +610,11 @@ impl AppDelegate for VeilApp {
 
         // Update theme based on app choice
         self.theme = match self.app.theme_choice {
-            ThemeChoice::Dark => esox_ui::Theme::dark(),
-            ThemeChoice::Light => esox_ui::Theme::light(),
+            ThemeChoice::Dark => veil_dark(),
+            ThemeChoice::Light => veil_light(),
         };
+
+        self.ui_state.update_blink(self.theme.cursor_blink_ms);
 
         // Take Ui-owned state out of self so we can pass them to Ui::begin
         // while still accessing self.app and self.input_* fields.
@@ -515,24 +624,24 @@ impl AppDelegate for VeilApp {
         let mut ui_state = std::mem::take(&mut self.ui_state);
         let theme = self.theme.clone();
 
-        let viewport = Rect {
-            x: 0.0,
-            y: 0.0,
-            w: self.width as f32,
-            h: self.height as f32,
-        };
+        let vp = Rect::new(0.0, 0.0, self.width as f32, self.height as f32);
 
-        let mut ui = Ui::begin(
-            frame,
-            gpu,
-            resources,
-            &mut text,
-            &mut ui_state,
-            &theme,
-            viewport,
-        );
+        // Fill viewport with background color
+        let bg = theme.bg_base;
+        frame.push(QuadInstance {
+            rect: [0.0, 0.0, vp.w, vp.h],
+            uv: [0.0; 4],
+            color: [bg.r, bg.g, bg.b, bg.a],
+            border_radius: [0.0; 4],
+            sdf_params: [0.0; 4],
+            flags: [0.0; 4],
+            clip_rect: [0.0; 4],
+            color2: [0.0; 4],
+            extra: [0.0; 4],
+        });
 
-        // Now self is free to borrow mutably for draw methods
+        let mut ui = Ui::begin(frame, gpu, resources, &mut text, &mut ui_state, &theme, vp);
+
         match &self.app.screen {
             Screen::Setup => self.draw_setup(&mut ui),
             Screen::ShowRecoveryPhrase(phrase) => {
@@ -553,17 +662,17 @@ impl AppDelegate for VeilApp {
         self.sync_inputs_to_app();
     }
 
-    fn on_key(&mut self, event: &KeyEvent, modifiers: ModifiersState) {
-        // Handle app-level shortcuts before forwarding to UI
-        if event.state == winit::event::ElementState::Pressed {
-            match event.logical_key {
-                Key::Named(NamedKey::Escape) => {
+    fn on_key(&mut self, event: &esox_input::KeyEvent, modifiers: Modifiers) {
+        // App-level shortcuts before forwarding to UI
+        if event.pressed {
+            match event.key {
+                esox_input::Key::Named(esox_input::NamedKey::Escape) => {
                     self.app.update_escape_pressed();
                     self.sync_app_to_inputs();
                     return;
                 }
-                Key::Named(NamedKey::ArrowUp) => {
-                    if !self.ui_state.focused.is_some() || self.app.message_input.is_empty() {
+                esox_input::Key::Named(esox_input::NamedKey::ArrowUp) => {
+                    if self.ui_state.focused.is_none() || self.app.message_input.is_empty() {
                         self.app.update_up_arrow_pressed();
                         self.sync_app_to_inputs();
                     }
@@ -572,9 +681,9 @@ impl AppDelegate for VeilApp {
             }
 
             // Ctrl+F for search toggle
-            if modifiers.control_key() {
-                if let Key::Character(ref c) = event.logical_key {
-                    if c == "f" {
+            if modifiers.ctrl() {
+                if let esox_input::Key::Character(ref c) = event.key {
+                    if c.as_str() == "f" {
                         self.app.update_toggle_search();
                         return;
                     }
@@ -582,7 +691,6 @@ impl AppDelegate for VeilApp {
             }
         }
 
-        // Forward to esox_ui for text input handling
         self.ui_state.process_key(event.clone(), modifiers);
     }
 
@@ -594,54 +702,64 @@ impl AppDelegate for VeilApp {
     fn on_mouse(&mut self, event: MouseInputEvent) {
         match event {
             MouseInputEvent::Moved { x, y } => {
-                self.ui_state.mouse.x = x as f32;
-                self.ui_state.mouse.y = y as f32;
+                self.ui_state.process_mouse_move(
+                    x as f32,
+                    y as f32,
+                    self.theme.item_height,
+                    self.theme.dropdown_gap,
+                );
             }
-            MouseInputEvent::Press { x, y, button } => {
-                self.ui_state.mouse.x = x as f32;
-                self.ui_state.mouse.y = y as f32;
-                if button == 0 {
-                    self.ui_state.mouse_pressed = true;
-                }
+            MouseInputEvent::Press { x, y, button: 0 } => {
+                self.ui_state.process_mouse_click(x as f32, y as f32);
             }
-            MouseInputEvent::Release { x, y, button } => {
-                self.ui_state.mouse.x = x as f32;
-                self.ui_state.mouse.y = y as f32;
-                if button == 0 {
-                    self.ui_state.mouse_pressed = false;
-                }
+            MouseInputEvent::Press { x, y, button: 2 } => {
+                self.ui_state.process_right_click(x as f32, y as f32);
             }
-            MouseInputEvent::Scroll { x, y, delta_y } => {
-                self.ui_state.pending_scroll = Some((x as f32, y as f32, delta_y));
+            MouseInputEvent::Release { button: 0, .. } => {
+                self.ui_state.process_mouse_release();
             }
-            MouseInputEvent::Left => {}
-            MouseInputEvent::RawMotion { .. } => {}
+            MouseInputEvent::Scroll { x, y, delta_y, .. } => {
+                self.ui_state.process_scroll(x as f32, y as f32, delta_y);
+            }
+            _ => {}
         }
     }
 
-    fn on_paste(&mut self, text: &str) {
-        self.ui_state.ime.committed = Some(text.to_string());
-    }
+    fn on_paste(&mut self, _text: &str) {}
 
     fn on_ime_commit(&mut self, text: &str) {
-        self.ui_state.ime.committed = Some(text.to_string());
+        self.ui_state.on_ime_commit(text.to_string());
+    }
+
+    fn on_ime_preedit(&mut self, text: String, cursor: Option<(usize, usize)>) {
+        self.ui_state.on_ime_preedit(text, cursor);
+    }
+
+    fn on_ime_enabled(&mut self, enabled: bool) {
+        self.ui_state.on_ime_enabled(enabled);
     }
 
     fn on_copy(&mut self) -> Option<String> {
-        // Find focused input and return selected text
         None
+    }
+
+    fn take_clear_color(&mut self) -> Option<[f32; 4]> {
+        self.pending_clear.take()
+    }
+
+    fn needs_redraw(&self) -> bool {
+        self.ui_state.needs_redraw()
+    }
+
+    fn needs_continuous_redraw(&self) -> bool {
+        self.ui_state.needs_continuous_redraw()
+    }
+
+    fn cursor_icon(&self, x: f64, y: f64) -> CursorIcon {
+        self.ui_state.cursor_icon(x as f32, y as f32)
     }
 
     fn on_scale_changed(&mut self, scale_factor: f64, _gpu: &GpuContext) {
         self.ui_state.scale_factor = scale_factor as f32;
-    }
-
-    fn needs_continuous_redraw(&self) -> bool {
-        // Redraw continuously to poll network events
-        true
-    }
-
-    fn cursor_icon(&self, _x: f64, _y: f64) -> winit::window::CursorIcon {
-        winit::window::CursorIcon::Default
     }
 }
