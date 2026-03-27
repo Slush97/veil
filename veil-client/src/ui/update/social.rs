@@ -27,9 +27,10 @@ impl App {
             let name = self.display_name_input.trim().to_string();
             self.display_names.insert(fp.clone(), name.clone());
             if let Some(ref store) = self.store
-                && let Err(e) = store.store_display_name(&fp, &name) {
-                    tracing::warn!("failed to persist display name: {e}");
-                }
+                && let Err(e) = store.store_display_name(&fp, &name)
+            {
+                tracing::warn!("failed to persist display name: {e}");
+            }
             self.display_name_input.clear();
         }
     }
@@ -57,6 +58,7 @@ impl App {
                     },
                     timestamp: chrono::Utc::now(),
                     channel_id,
+                    expires_at: None,
                 };
                 if self.seal_send_persist(&content).is_some() {
                     let key = msg_id.0;
@@ -100,9 +102,10 @@ impl App {
         self.connection_state =
             ConnectionState::Connecting(format!("Connecting to LAN peer {addr}..."));
         if let Some(ref mut tx) = self.net_cmd_tx
-            && let Err(e) = tx.try_send(NetCommand::Connect(addr)) {
-                tracing::warn!("failed to send connect command: {e}");
-            }
+            && let Err(e) = tx.try_send(NetCommand::Connect(addr))
+        {
+            tracing::warn!("failed to send connect command: {e}");
+        }
     }
 
     pub(crate) fn update_lan_peer_discovered(

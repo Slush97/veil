@@ -1,0 +1,37 @@
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  font-weight: var(--weight-semibold);
+  flex-shrink: 0;
+  position: relative;
+  background: var(--accent-dim);
+  color: var(--accent);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.sm {
+  width: var(--avatar-sm);
+  height: var(--avatar-sm);
+  font-size: var(--text-xs);
+}
+
+.md {
+  width: var(--avatar-md);
+  height: var(--avatar-md);
+  font-size: var(--text-sm);
+}
+
+.lg {
+  width: var(--avatar-lg);
+  height: var(--avatar-lg);
+  font-size: var(--text-base);
+}
+
+.xl {
+  width: var(--avatar-xl);
+  height: var(--avatar-xl);
+  font-size: var(--text-lg);
+}

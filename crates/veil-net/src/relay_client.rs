@@ -322,8 +322,20 @@ async fn connect_and_run(
             RelayCommand::DrainMailbox => {
                 send_relay_msg(&conn, &RelayMessage::DrainMailbox).await?;
             }
-            RelayCommand::Register { username, public_key, signature } => {
-                send_relay_msg(&conn, &RelayMessage::Register { username, public_key, signature }).await?;
+            RelayCommand::Register {
+                username,
+                public_key,
+                signature,
+            } => {
+                send_relay_msg(
+                    &conn,
+                    &RelayMessage::Register {
+                        username,
+                        public_key,
+                        signature,
+                    },
+                )
+                .await?;
             }
             RelayCommand::LookupUser(username) => {
                 send_relay_msg(&conn, &RelayMessage::Lookup { username }).await?;

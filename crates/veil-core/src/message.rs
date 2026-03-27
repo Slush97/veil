@@ -3,7 +3,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use veil_crypto::{DeviceCertificate, GroupKey, GroupKeyRing, Identity, PeerId};
 
+use crate::compression;
 use crate::control::ControlMessage;
+
+/// Maximum decompressed size for message plaintext (16 MiB).
+const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 /// Unique identifier for a message (content-addressed).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -21,6 +25,9 @@ pub struct MessageContent {
     pub kind: MessageKind,
     pub timestamp: DateTime<Utc>,
     pub channel_id: ChannelId,
+    /// Optional expiry time (unix timestamp). Messages past this time should be purged.
+    #[serde(default)]
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,6 +73,36 @@ pub enum MessageKind {
     },
     /// A control message for group state changes (key rotation, membership, etc.).
     Control(ControlMessage),
+    /// Audio message with duration and waveform visualization data.
+    Audio {
+        blob_id: BlobId,
+        /// Duration in seconds (0.0 if unknown).
+        duration_secs: f32,
+        /// Low-resolution waveform: 64 amplitude samples normalized to 0–255.
+        waveform: Vec<u8>,
+        ciphertext_len: u64,
+    },
+    /// Link preview metadata for URLs found in a previously-sent text message.
+    /// Sent as a follow-up after the original text message.
+    LinkPreview {
+        target_id: MessageId,
+        previews: Vec<EmbedPreview>,
+    },
+}
+
+/// Metadata extracted from a URL for link preview display.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmbedPreview {
+    /// The URL that was fetched.
+    pub url: String,
+    /// Page title (from `<title>` or `og:title`).
+    pub title: Option<String>,
+    /// Page description (from meta description or `og:description`).
+    pub description: Option<String>,
+    /// URL of a preview image (`og:image`). Not fetched — just the URL.
+    pub image_url: Option<String>,
+    /// Site name (`og:site_name`).
+    pub site_name: Option<String>,
 }
 
 /// Derive an opaque routing tag from a group ID.
@@ -98,9 +135,11 @@ impl SealedMessage {
         group_id: &[u8; 32],
         identity: &Identity,
     ) -> Result<Self, veil_crypto::EncryptError> {
-        let plaintext = bincode::serialize(content)
+        let serialized = bincode::serialize(content)
             .map_err(|_| veil_crypto::EncryptError::SerializationFailed)?;
-        let ciphertext = group_key.encrypt(&plaintext)?;
+        let compressed = compression::compress(&serialized)
+            .map_err(|_| veil_crypto::EncryptError::SerializationFailed)?;
+        let ciphertext = group_key.encrypt(&compressed)?;
         let id = MessageId::from_content(&ciphertext);
 
         // Derive opaque routing tag
@@ -153,10 +192,12 @@ impl SealedMessage {
 
         let sender = sender.ok_or(SealedMessageError::InvalidSignature)?;
 
-        // Decrypt
-        let plaintext = group_key
+        // Decrypt and decompress
+        let decrypted = group_key
             .decrypt(&self.ciphertext)
             .map_err(|_| SealedMessageError::DecryptionFailed)?;
+        let plaintext = compression::decompress(&decrypted, MAX_MESSAGE_SIZE)
+            .map_err(SealedMessageError::DecompressionFailed)?;
 
         let content: MessageContent = bincode::deserialize(&plaintext)
             .map_err(|_| SealedMessageError::DeserializationFailed)?;
@@ -210,10 +251,12 @@ impl SealedMessage {
 
         let sender = sender.ok_or(SealedMessageError::InvalidSignature)?;
 
-        // Decrypt
-        let plaintext = group_key
+        // Decrypt and decompress
+        let decrypted = group_key
             .decrypt(&self.ciphertext)
             .map_err(|_| SealedMessageError::DecryptionFailed)?;
+        let plaintext = compression::decompress(&decrypted, MAX_MESSAGE_SIZE)
+            .map_err(SealedMessageError::DecompressionFailed)?;
 
         let content: MessageContent = bincode::deserialize(&plaintext)
             .map_err(|_| SealedMessageError::DeserializationFailed)?;
@@ -244,6 +287,8 @@ pub enum SealedMessageError {
     InvalidSignature,
     #[error("decryption failed")]
     DecryptionFailed,
+    #[error("decompression failed: {0}")]
+    DecompressionFailed(#[from] crate::compression::CompressionError),
     #[error("deserialization failed")]
     DeserializationFailed,
     #[error("key generation mismatch")]
@@ -274,6 +319,22 @@ impl Default for ChannelId {
     }
 }
 
+/// Category within a group — organizes channels under collapsible headings.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CategoryId(pub Uuid);
+
+impl CategoryId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for CategoryId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +349,7 @@ mod tests {
             kind: MessageKind::Text("hello".into()),
             timestamp: Utc::now(),
             channel_id: ChannelId::new(),
+            expires_at: None,
         };
 
         let sealed = SealedMessage::seal(&content, &group_key, &group_id, &identity).unwrap();
@@ -312,6 +374,7 @@ mod tests {
             kind: MessageKind::Text("hello".into()),
             timestamp: Utc::now(),
             channel_id: ChannelId::new(),
+            expires_at: None,
         };
 
         let mut sealed = SealedMessage::seal(&content, &group_key, &group_id, &identity).unwrap();
@@ -335,6 +398,7 @@ mod tests {
             kind: MessageKind::Text("hello".into()),
             timestamp: Utc::now(),
             channel_id: ChannelId::new(),
+            expires_at: None,
         };
 
         // Alice seals, but Bob is the only known member

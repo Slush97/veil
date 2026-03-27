@@ -29,9 +29,10 @@ impl App {
                     relay_addr,
                     passphrase: self.invite_passphrase.clone(),
                     group_key: current_key,
-                }) {
-                    tracing::warn!("failed to send create invite: {e}");
-                }
+                })
+            {
+                tracing::warn!("failed to send create invite: {e}");
+            }
         }
     }
 
@@ -41,9 +42,10 @@ impl App {
                 && let Err(e) = tx.try_send(NetCommand::AcceptInvite {
                     url: self.invite_input.clone(),
                     passphrase: self.invite_passphrase.clone(),
-                }) {
-                    tracing::warn!("failed to send accept invite: {e}");
-                }
+                })
+            {
+                tracing::warn!("failed to send accept invite: {e}");
+            }
             // Zeroize invite passphrase after use
             self.invite_passphrase.zeroize();
         }

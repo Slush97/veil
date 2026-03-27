@@ -23,9 +23,11 @@ impl App {
                             ring.rotate_forward(sender.verifying_key.clone());
 
                             if let Some(ref store) = self.store
-                                && let Err(e) = store.store_group_v2(&group.id.0, &group.name, &ring) {
-                                    tracing::warn!("failed to persist group after key rotation: {e}");
-                                }
+                                && let Err(e) =
+                                    store.store_group_v2(&group.id.0, &group.name, &ring)
+                            {
+                                tracing::warn!("failed to persist group after key rotation: {e}");
+                            }
                         }
                         self.messages.push(ChatMessage::system(format!(
                             "Key rotated (epoch {})",
@@ -54,9 +56,13 @@ impl App {
                                     ring.apply_eviction(new_key, epoch.clone());
 
                                     if let Some(ref store) = self.store
-                                        && let Err(e) = store.store_group_v2(&group.id.0, &group.name, &ring) {
-                                            tracing::warn!("failed to persist group after key rotation: {e}");
-                                        }
+                                        && let Err(e) =
+                                            store.store_group_v2(&group.id.0, &group.name, &ring)
+                                    {
+                                        tracing::warn!(
+                                            "failed to persist group after key rotation: {e}"
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -74,9 +80,11 @@ impl App {
                 if certificate.verify() {
                     // Store the certificate
                     if let Some(ref store) = self.store
-                        && let Err(e) = store.store_device_cert(&certificate.device_id, &certificate) {
-                            tracing::warn!("failed to persist device cert: {e}");
-                        }
+                        && let Err(e) =
+                            store.store_device_cert(&certificate.device_id, &certificate)
+                    {
+                        tracing::warn!("failed to persist device cert: {e}");
+                    }
 
                     // Add to all groups' device_certs
                     for group in &mut self.groups {
@@ -118,13 +126,21 @@ impl App {
             } => {
                 // Store the member's public key in the current group for signature verification
                 if let Some(ref mut group) = self.current_group {
-                    if !group.members.iter().any(|m| m.verifying_key == member_id.verifying_key) {
+                    if !group
+                        .members
+                        .iter()
+                        .any(|m| m.verifying_key == member_id.verifying_key)
+                    {
                         group.members.push(member_id.clone());
                     }
                 }
                 // Also update the group in the groups list
                 for group in &mut self.groups {
-                    if !group.members.iter().any(|m| m.verifying_key == member_id.verifying_key) {
+                    if !group
+                        .members
+                        .iter()
+                        .any(|m| m.verifying_key == member_id.verifying_key)
+                    {
                         group.members.push(member_id.clone());
                     }
                 }
@@ -134,9 +150,10 @@ impl App {
                 if !display_name.is_empty() {
                     self.display_names.insert(fp.clone(), display_name.clone());
                     if let Some(ref store) = self.store
-                        && let Err(e) = store.store_display_name(&fp, &display_name) {
-                            tracing::warn!("failed to persist display name: {e}");
-                        }
+                        && let Err(e) = store.store_display_name(&fp, &display_name)
+                    {
+                        tracing::warn!("failed to persist display name: {e}");
+                    }
                 }
                 let invited_by_name = self.resolve_display_name(&invited_by);
                 self.messages.push(ChatMessage::system(format!(
@@ -153,6 +170,16 @@ impl App {
                     removed_by.fingerprint()
                 )));
             }
+            ControlMessage::RoleChanged {
+                member_id,
+                new_role,
+                ..
+            } => {
+                let name = self.resolve_display_name(&member_id);
+                self.messages.push(ChatMessage::system(format!(
+                    "{name}'s role changed to {new_role:?}",
+                )));
+            }
             ControlMessage::MetadataUpdate { field, value } => {
                 let desc = match field {
                     veil_core::MetadataField::GroupName => format!("Group renamed to '{value}'"),
@@ -162,11 +189,119 @@ impl App {
                     veil_core::MetadataField::ChannelAdded { name, .. } => {
                         format!("Channel #{name} added")
                     }
-                    veil_core::MetadataField::ChannelRemoved { name } => {
-                        format!("Channel #{name} removed")
+                    veil_core::MetadataField::ChannelRemoved { channel_id } => {
+                        format!("Channel #{channel_id} removed")
                     }
+                    veil_core::MetadataField::CategoryAdded { name, .. } => {
+                        format!("Category '{name}' added")
+                    }
+                    veil_core::MetadataField::CategoryRemoved { .. } => {
+                        "Category removed".to_string()
+                    }
+                    veil_core::MetadataField::ChannelMoved { .. } => "Channel moved".to_string(),
                 };
                 self.messages.push(ChatMessage::system(desc));
+            }
+            ControlMessage::ProfileUpdate { fields } => {
+                for field in &fields {
+                    match field {
+                        veil_core::ProfileField::DisplayName(name) => {
+                            let fp = sender.fingerprint();
+                            self.display_names.insert(fp.clone(), name.clone());
+                            if let Some(ref store) = self.store {
+                                let _ = store.store_display_name(&fp, name);
+                            }
+                        }
+                        veil_core::ProfileField::Avatar(blob_id) => {
+                            // Request the avatar blob if we don't have it
+                            if let Some(bid) = blob_id {
+                                let have_it = self
+                                    .store
+                                    .as_ref()
+                                    .and_then(|s| s.get_blob_full(bid).ok())
+                                    .flatten()
+                                    .is_some();
+                                if !have_it {
+                                    if let Some(ref mut tx) = self.net_cmd_tx {
+                                        let _ = tx.try_send(
+                                            crate::ui::message::NetCommand::RequestBlob {
+                                                blob_id: bid.clone(),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        // Bio and Status are stored but don't need special handling
+                        _ => {}
+                    }
+                }
+                let name = self.resolve_display_name(&sender);
+                self.messages
+                    .push(ChatMessage::system(format!("{name} updated their profile")));
+            }
+            ControlMessage::PinMessage {
+                message_id,
+                ..
+            } => {
+                // Mark the message as pinned in our local state
+                for msg in &mut self.messages {
+                    if msg.id.as_ref() == Some(&message_id) {
+                        msg.pinned = true;
+                    }
+                }
+                let name = self.resolve_display_name(&sender);
+                self.messages
+                    .push(ChatMessage::system(format!("{name} pinned a message")));
+            }
+            ControlMessage::UnpinMessage {
+                message_id,
+                ..
+            } => {
+                for msg in &mut self.messages {
+                    if msg.id.as_ref() == Some(&message_id) {
+                        msg.pinned = false;
+                    }
+                }
+                let name = self.resolve_display_name(&sender);
+                self.messages
+                    .push(ChatMessage::system(format!("{name} unpinned a message")));
+            }
+            ControlMessage::SetEphemeral { ttl, .. } => {
+                let name = self.resolve_display_name(&sender);
+                let desc = match ttl {
+                    Some(t) => format!("{name} set messages to expire after {t}s"),
+                    None => format!("{name} disabled ephemeral messages"),
+                };
+                self.messages.push(ChatMessage::system(desc));
+            }
+            ControlMessage::AddEmoji {
+                shortcode, blob_id, ..
+            } => {
+                // Request the emoji blob if we don't have it
+                let have_it = self
+                    .store
+                    .as_ref()
+                    .and_then(|s| s.get_blob_full(&blob_id).ok())
+                    .flatten()
+                    .is_some();
+                if !have_it {
+                    if let Some(ref mut tx) = self.net_cmd_tx {
+                        let _ = tx.try_send(crate::ui::message::NetCommand::RequestBlob {
+                            blob_id,
+                        });
+                    }
+                }
+                let name = self.resolve_display_name(&sender);
+                self.messages.push(ChatMessage::system(format!(
+                    "{name} added emoji :{shortcode}:"
+                )));
+            }
+            ControlMessage::RemoveEmoji { shortcode } => {
+                let name = self.resolve_display_name(&sender);
+                self.messages.push(ChatMessage::system(format!(
+                    "{name} removed emoji :{shortcode}:"
+                )));
             }
         }
     }

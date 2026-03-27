@@ -83,7 +83,10 @@ impl App {
     }
 
     pub(crate) fn update_contact_found(&mut self, username: String, public_key: [u8; 32]) {
-        self.contact_search_result = Some(ContactSearchResult::Found { username, public_key });
+        self.contact_search_result = Some(ContactSearchResult::Found {
+            username,
+            public_key,
+        });
     }
 
     pub(crate) fn update_contact_not_found(&mut self, username: String) {
@@ -91,7 +94,9 @@ impl App {
     }
 
     pub(crate) fn update_add_contact(&mut self, username: String, public_key: [u8; 32]) {
-        let Some(ref master) = self.master else { return };
+        let Some(ref master) = self.master else {
+            return;
+        };
 
         let my_key = {
             let vk = &master.peer_id().verifying_key;
@@ -128,7 +133,9 @@ impl App {
             device_certs: Vec::new(),
             members: vec![
                 self.master_peer_id(),
-                PeerId { verifying_key: public_key.to_vec() },
+                PeerId {
+                    verifying_key: public_key.to_vec(),
+                },
             ],
         };
 

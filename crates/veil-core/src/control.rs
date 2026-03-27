@@ -11,7 +11,8 @@
 use serde::{Deserialize, Serialize};
 use veil_crypto::{DeviceCertificate, DeviceRevocation, EpochReason, KeyEpoch, KeyPackage, PeerId};
 
-use crate::group::Role;
+use crate::group::{Role, role_level};
+use crate::message::{BlobId, ChannelId, MessageId};
 
 /// A control message that modifies group state.
 ///
@@ -61,8 +62,59 @@ pub enum ControlMessage {
         removed_by: PeerId,
     },
 
+    /// A member's role was changed.
+    RoleChanged {
+        member_id: PeerId,
+        new_role: Role,
+        changed_by: PeerId,
+    },
+
     /// Group metadata was updated (name, description, etc.).
     MetadataUpdate { field: MetadataField, value: String },
+
+    /// A member updated their profile (display name, bio, status, avatar).
+    /// Only the member themselves can update their own profile.
+    ProfileUpdate { fields: Vec<ProfileField> },
+
+    /// Pin a message in a channel. Requires Moderator+ or manage_messages permission.
+    PinMessage {
+        channel_id: ChannelId,
+        message_id: MessageId,
+    },
+
+    /// Unpin a message from a channel.
+    UnpinMessage {
+        channel_id: ChannelId,
+        message_id: MessageId,
+    },
+
+    /// Set or clear ephemeral mode on a channel. Requires Admin+.
+    SetEphemeral {
+        channel_id: ChannelId,
+        /// TTL in seconds. None = disable ephemeral mode.
+        ttl: Option<u64>,
+    },
+
+    /// Add a custom emoji to the group. Requires Moderator+.
+    AddEmoji {
+        shortcode: String,
+        blob_id: BlobId,
+    },
+
+    /// Remove a custom emoji from the group. Requires Moderator+.
+    RemoveEmoji {
+        shortcode: String,
+    },
+}
+
+/// A profile field that was updated.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ProfileField {
+    DisplayName(String),
+    Bio(String),
+    Status(String),
+    /// Avatar blob reference. None = avatar removed.
+    Avatar(Option<BlobId>),
 }
 
 /// Which piece of group metadata was updated.
@@ -70,8 +122,23 @@ pub enum ControlMessage {
 pub enum MetadataField {
     GroupName,
     GroupDescription,
-    ChannelAdded { name: String, kind: String },
-    ChannelRemoved { name: String },
+    ChannelAdded {
+        name: String,
+        kind: String,
+    },
+    ChannelRemoved {
+        channel_id: String,
+    },
+    CategoryAdded {
+        name: String,
+    },
+    CategoryRemoved {
+        category_id: String,
+    },
+    ChannelMoved {
+        channel_id: String,
+        category_id: Option<String>,
+    },
 }
 
 /// Minimum role required to perform each control operation.
@@ -91,8 +158,18 @@ impl ControlMessage {
             // Only admins+ can manage membership
             ControlMessage::MemberAdded { .. } => Role::Admin,
             ControlMessage::MemberRemoved { .. } => Role::Admin,
+            // Only admins+ can change roles (further checks needed: can't promote above own level)
+            ControlMessage::RoleChanged { .. } => Role::Admin,
             // Only admins+ can change metadata
             ControlMessage::MetadataUpdate { .. } => Role::Admin,
+            // Any member can update their own profile
+            ControlMessage::ProfileUpdate { .. } => Role::Member,
+            // Moderators+ can pin/unpin messages
+            ControlMessage::PinMessage { .. } => Role::Moderator,
+            ControlMessage::UnpinMessage { .. } => Role::Moderator,
+            ControlMessage::SetEphemeral { .. } => Role::Admin,
+            ControlMessage::AddEmoji { .. } => Role::Moderator,
+            ControlMessage::RemoveEmoji { .. } => Role::Moderator,
         }
     }
 
@@ -116,17 +193,10 @@ impl ControlMessage {
             ControlMessage::DeviceRevoked { revocation } => {
                 revocation.master_id == *sender_master_id
             }
+            // Profile updates are implicitly self-only (applied to the sender)
+            ControlMessage::ProfileUpdate { .. } => true,
             _ => true, // Other messages don't have this constraint
         }
-    }
-}
-
-/// Map roles to numeric levels for comparison.
-fn role_level(role: &Role) -> u8 {
-    match role {
-        Role::Owner => 2,
-        Role::Admin => 1,
-        Role::Member => 0,
     }
 }
 
@@ -147,6 +217,7 @@ mod tests {
         };
         assert!(member_added.is_authorized(&Role::Owner));
         assert!(member_added.is_authorized(&Role::Admin));
+        assert!(!member_added.is_authorized(&Role::Moderator));
         assert!(!member_added.is_authorized(&Role::Member));
     }
 

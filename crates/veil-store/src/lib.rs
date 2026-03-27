@@ -12,4 +12,6 @@ pub enum StoreError {
     ErasureCoding(String),
     #[error("crypto error: {0}")]
     Crypto(String),
+    #[error("compression error: {0}")]
+    Compression(String),
 }

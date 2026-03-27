@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use veil_core::{GroupId, MessageKind, SealedMessage};
+use veil_core::{BlobId, GroupId, MessageKind, SealedMessage};
 use veil_crypto::{DeviceCertificate, GroupKey, GroupKeyRing, PeerId};
 use veil_net::ConnectionId;
 
@@ -23,9 +23,10 @@ impl App {
         let pending: Vec<SealedMessage> = self.pending_messages.drain(..).collect();
         for sealed in pending {
             if let Some(ref mut tx) = self.net_cmd_tx
-                && let Err(e) = tx.try_send(NetCommand::SendMessage(sealed)) {
-                    tracing::warn!("failed to flush pending message: {e}");
-                }
+                && let Err(e) = tx.try_send(NetCommand::SendMessage(sealed))
+            {
+                tracing::warn!("failed to flush pending message: {e}");
+            }
         }
         // Update status of pending messages to Sent
         for msg in &mut self.messages {
@@ -38,9 +39,10 @@ impl App {
         if !self.relay_addr_input.is_empty()
             && let Ok(addr) = self.relay_addr_input.parse::<SocketAddr>()
             && let Some(ref mut tx) = self.net_cmd_tx
-            && let Err(e) = tx.try_send(NetCommand::ConnectRelay(addr)) {
-                tracing::warn!("failed to auto-reconnect relay: {e}");
-            }
+            && let Err(e) = tx.try_send(NetCommand::ConnectRelay(addr))
+        {
+            tracing::warn!("failed to auto-reconnect relay: {e}");
+        }
     }
 
     pub(crate) fn update_peer_connected(
@@ -76,9 +78,10 @@ impl App {
         {
             // Store peer's device cert
             if let Some(ref store) = self.store
-                && let Err(e) = store.store_device_cert(&cert.device_id, &cert) {
-                    tracing::warn!("failed to persist device cert: {e}");
-                }
+                && let Err(e) = store.store_device_cert(&cert.device_id, &cert)
+            {
+                tracing::warn!("failed to persist device cert: {e}");
+            }
             device_certs.push(cert);
         }
 
@@ -111,7 +114,10 @@ impl App {
             // Merge global known members with this group's member list
             let mut members = global_members.clone();
             for m in &group.members {
-                if !members.iter().any(|existing| existing.verifying_key == m.verifying_key) {
+                if !members
+                    .iter()
+                    .any(|existing| existing.verifying_key == m.verifying_key)
+                {
                     members.push(m.clone());
                 }
             }
@@ -119,6 +125,12 @@ impl App {
                 sealed.verify_and_open_with_keyring(&ring, &members, &group.device_certs)
             {
                 drop(ring);
+
+                // Validate message content (field lengths, structural limits)
+                if let Err(e) = veil_core::validate(&content) {
+                    tracing::warn!("rejected invalid message from {}: {e}", sender.fingerprint());
+                    break;
+                }
 
                 // Track unread for non-active groups
                 let is_active = self
@@ -287,9 +299,10 @@ impl App {
                                     if let Some(ref mut tx) = self.net_cmd_tx
                                         && let Err(e) = tx.try_send(NetCommand::RequestBlob {
                                             blob_id: blob_id.clone(),
-                                        }) {
-                                            tracing::warn!("failed to request blob: {e}");
-                                        }
+                                        })
+                                    {
+                                        tracing::warn!("failed to request blob: {e}");
+                                    }
                                     FileStatus::Downloading
                                 }
                             }
@@ -309,14 +322,126 @@ impl App {
                         });
                         self.messages.push(cm);
                     }
-                    _ => {
-                        // Image, Video, etc. — display placeholder
-                        self.messages.push(ChatMessage::user(
+                    MessageKind::Image {
+                        ref blob_id,
+                        width,
+                        height,
+                        ref thumbnail,
+                        ciphertext_len,
+                        ..
+                    } => {
+                        let size_str = format!("{:.1} KB", ciphertext_len as f64 / 1024.0);
+                        let file_status = resolve_blob_status(blob_id, ciphertext_len, group, &self.store, &mut self.net_cmd_tx);
+                        let mut cm = ChatMessage::user_with_channel(
                             sealed.id.clone(),
                             sender.clone(),
-                            "[unsupported message type]".into(),
+                            String::new(),
                             content.timestamp,
-                        ));
+                            content.channel_id.clone(),
+                        );
+                        cm.sender = sender_name.clone();
+                        cm.thumbnail = if thumbnail.is_empty() {
+                            None
+                        } else {
+                            Some(thumbnail.clone())
+                        };
+                        cm.image_dimensions = Some((width, height));
+                        cm.file_info = Some(FileInfo {
+                            blob_id: blob_id.clone(),
+                            filename: format!("image_{width}x{height}"),
+                            size_str,
+                            status: file_status,
+                        });
+                        self.messages.push(cm);
+
+                        if !is_own {
+                            self.send_notification(&sender_name, "[image]");
+                        }
+                    }
+                    MessageKind::Video {
+                        ref blob_id,
+                        duration_secs,
+                        ref thumbnail,
+                        ciphertext_len,
+                        ..
+                    } => {
+                        let size_str = format!("{:.1} MB", ciphertext_len as f64 / 1_048_576.0);
+                        let dur = format_duration(duration_secs);
+                        let file_status = resolve_blob_status(blob_id, ciphertext_len, group, &self.store, &mut self.net_cmd_tx);
+                        let mut cm = ChatMessage::user_with_channel(
+                            sealed.id.clone(),
+                            sender.clone(),
+                            format!("[video {dur}]"),
+                            content.timestamp,
+                            content.channel_id.clone(),
+                        );
+                        cm.sender = sender_name.clone();
+                        cm.thumbnail = if thumbnail.is_empty() {
+                            None
+                        } else {
+                            Some(thumbnail.clone())
+                        };
+                        cm.file_info = Some(FileInfo {
+                            blob_id: blob_id.clone(),
+                            filename: format!("video_{dur}"),
+                            size_str,
+                            status: file_status,
+                        });
+                        self.messages.push(cm);
+
+                        if !is_own {
+                            self.send_notification(&sender_name, "[video]");
+                        }
+                    }
+                    MessageKind::Audio {
+                        ref blob_id,
+                        duration_secs,
+                        ref waveform,
+                        ciphertext_len,
+                        ..
+                    } => {
+                        let file_status = resolve_blob_status(blob_id, ciphertext_len, group, &self.store, &mut self.net_cmd_tx);
+                        let dur = format_duration(duration_secs);
+                        let mut cm = ChatMessage::user_with_channel(
+                            sealed.id.clone(),
+                            sender.clone(),
+                            format!("[audio {dur}]"),
+                            content.timestamp,
+                            content.channel_id.clone(),
+                        );
+                        cm.sender = sender_name.clone();
+                        cm.audio_info = Some(AudioInfo {
+                            blob_id: blob_id.clone(),
+                            duration_secs,
+                            waveform: waveform.clone(),
+                            status: file_status,
+                        });
+                        self.messages.push(cm);
+
+                        if !is_own {
+                            self.send_notification(&sender_name, "[audio]");
+                        }
+                    }
+                    MessageKind::LinkPreview {
+                        ref target_id,
+                        ref previews,
+                    } => {
+                        // Attach link previews to the target message
+                        if let Some(msg) = self
+                            .messages
+                            .iter_mut()
+                            .find(|m| m.id.as_ref() == Some(target_id))
+                        {
+                            msg.link_previews = previews
+                                .iter()
+                                .map(|p| LinkPreviewInfo {
+                                    url: p.url.clone(),
+                                    title: p.title.clone(),
+                                    description: p.description.clone(),
+                                    site_name: p.site_name.clone(),
+                                })
+                                .collect();
+                        }
                     }
                 }
                 decrypted = true;
@@ -336,4 +461,73 @@ impl App {
             tracing::warn!("failed to persist message: {e}");
         }
     }
+
+}
+
+/// Determine blob availability: check store, try shard reconstruction, or request from peers.
+fn resolve_blob_status(
+    blob_id: &BlobId,
+    ciphertext_len: u64,
+    group: &GroupState,
+    store: &Option<Arc<veil_store::LocalStore>>,
+    net_cmd_tx: &mut Option<tokio::sync::mpsc::Sender<NetCommand>>,
+) -> FileStatus {
+    let have_blob = store
+        .as_ref()
+        .and_then(|s| s.get_blob_full(blob_id).ok())
+        .flatten()
+        .is_some();
+
+    if have_blob {
+        return FileStatus::Available;
+    }
+
+    // Try to reconstruct from shards
+    let reconstructed = store.as_ref().and_then(|s| {
+        let shards = s.list_blob_shards(blob_id).ok()?;
+        if shards.len() >= veil_store::blob::DATA_SHARDS {
+            let shard_opts: Vec<Option<veil_store::BlobShard>> = (0
+                ..veil_store::blob::TOTAL_SHARDS)
+                .map(|i| {
+                    shards
+                        .iter()
+                        .find(|sh| sh.shard_index == i as u8)
+                        .cloned()
+                })
+                .collect();
+            if let Ok(ring) = group.key_ring.lock()
+                && let Ok(_data) = veil_store::decode_blob(
+                    &shard_opts,
+                    ciphertext_len as usize,
+                    ring.current(),
+                )
+            {
+                return Some(());
+            }
+            None
+        } else {
+            None
+        }
+    });
+
+    if reconstructed.is_some() {
+        FileStatus::Available
+    } else {
+        if let Some(tx) = net_cmd_tx
+            && let Err(e) = tx.try_send(NetCommand::RequestBlob {
+                blob_id: blob_id.clone(),
+            })
+        {
+            tracing::warn!("failed to request blob: {e}");
+        }
+        FileStatus::Downloading
+    }
+}
+
+/// Format seconds as "M:SS".
+fn format_duration(secs: f32) -> String {
+    let total = secs as u32;
+    let m = total / 60;
+    let s = total % 60;
+    format!("{m}:{s:02}")
 }

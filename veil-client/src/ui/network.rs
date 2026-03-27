@@ -14,7 +14,7 @@ use veil_net::{
 };
 use veil_store::LocalStore;
 
-use super::message::{NetworkEvent, NetCommand};
+use super::message::{NetCommand, NetworkEvent};
 use super::types::SharedGroupKey;
 
 pub(crate) fn veil_data_dir() -> std::path::PathBuf {
@@ -63,6 +63,7 @@ pub(crate) async fn spawn_network_worker(
     let peer_event_tx = manager.event_sender();
 
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<NetCommand>(100);
+    let cmd_tx_internal = cmd_tx.clone();
 
     let _ = event_tx
         .send(NetworkEvent::NetworkReady { local_addr, cmd_tx })
@@ -84,6 +85,9 @@ pub(crate) async fn spawn_network_worker(
 
     // Dedup to prevent duplicate messages from P2P + relay
     let mut dedup = MessageDeduplicator::with_capacity(2048);
+
+    // P2P rate limiting
+    let mut rate_limiter = veil_net::PeerRateLimiter::new(veil_net::RateLimitConfig::default());
 
     // mDNS discovery
     let mut discovery_rx: Option<tokio::sync::mpsc::Receiver<DiscoveryEvent>> = None;
@@ -121,16 +125,22 @@ pub(crate) async fn spawn_network_worker(
             event = event_rx.recv() => {
                 match event {
                     Some(PeerEvent::Connected { conn_id, peer_id, session_key, device_certificate }) => {
+                        rate_limiter.add_peer(conn_id);
                         let _ = event_tx
                             .send(NetworkEvent::PeerConnected { conn_id, peer_id, session_key, device_certificate })
                             .await;
                     }
                     Some(PeerEvent::Disconnected { conn_id }) => {
+                        rate_limiter.remove_peer(conn_id);
                         let _ = event_tx
                             .send(NetworkEvent::PeerDisconnected { conn_id })
                             .await;
                     }
                     Some(PeerEvent::Message { conn_id, message, .. }) => {
+                        if !rate_limiter.check(conn_id) {
+                            tracing::warn!("rate limited peer {conn_id}, dropping message");
+                            continue;
+                        }
                         match message {
                             WireMessage::MessagePush(sealed) => {
                                 if dedup.check(&sealed).is_ok() {
@@ -394,29 +404,90 @@ pub(crate) async fn spawn_network_worker(
                             Ok(file_data) => {
                                 let size_bytes = file_data.len() as u64;
 
+                                // Detect media type for auto-routing
+                                let media_type = veil_core::detect_media(&file_data, Some(&filename));
+                                let image_meta = if media_type == veil_core::MediaType::Image {
+                                    veil_core::extract_image_meta(&file_data)
+                                } else {
+                                    None
+                                };
+                                let audio_meta = if media_type == veil_core::MediaType::Audio {
+                                    veil_core::extract_audio_meta(&file_data)
+                                } else {
+                                    None
+                                };
+
+                                // Compress and encrypt
+                                let compressed = match veil_core::compress(&file_data) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
+                                        continue;
+                                    }
+                                };
+                                let ciphertext = match group_key.encrypt(&compressed) {
+                                    Ok(ct) => ct,
+                                    Err(e) => {
+                                        let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
+                                        continue;
+                                    }
+                                };
+                                let blob_id = veil_core::BlobId(
+                                    *blake3::hash(&ciphertext).as_bytes(),
+                                );
+                                let ciphertext_len = ciphertext.len() as u64;
+
                                 if file_data.len() < veil_store::INLINE_THRESHOLD {
-                                    // Small file: encrypt and send inline
-                                    let ciphertext = match group_key.encrypt(&file_data) {
-                                        Ok(ct) => ct,
-                                        Err(e) => {
-                                            let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
-                                            continue;
+                                    // Small file: store blob for media types, inline for generic files
+                                    let kind = match (&media_type, &image_meta) {
+                                        (veil_core::MediaType::Image, Some(meta)) => {
+                                            let _ = store.store_blob_full(&blob_id, &ciphertext);
+                                            veil_core::MessageKind::Image {
+                                                blob_id,
+                                                width: meta.width,
+                                                height: meta.height,
+                                                thumbnail: meta.thumbnail.clone(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        (veil_core::MediaType::Video, _) => {
+                                            let _ = store.store_blob_full(&blob_id, &ciphertext);
+                                            veil_core::MessageKind::Video {
+                                                blob_id,
+                                                duration_secs: 0.0,
+                                                thumbnail: Vec::new(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        (veil_core::MediaType::Audio, _) => {
+                                            let _ = store.store_blob_full(&blob_id, &ciphertext);
+                                            let (duration_secs, waveform) = match &audio_meta {
+                                                Some(meta) => (meta.duration_secs, meta.waveform.clone()),
+                                                None => (0.0, Vec::new()),
+                                            };
+                                            veil_core::MessageKind::Audio {
+                                                blob_id,
+                                                duration_secs,
+                                                waveform,
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        _ => {
+                                            veil_core::MessageKind::File {
+                                                blob_id,
+                                                filename: filename.clone(),
+                                                size_bytes,
+                                                ciphertext_len,
+                                                inline_data: Some(ciphertext),
+                                            }
                                         }
                                     };
-                                    let blob_id = veil_core::BlobId(
-                                        *blake3::hash(&ciphertext).as_bytes(),
-                                    );
-                                    let ciphertext_len = ciphertext.len() as u64;
+
                                     let content = veil_core::MessageContent {
-                                        kind: veil_core::MessageKind::File {
-                                            blob_id,
-                                            filename: filename.clone(),
-                                            size_bytes,
-                                            ciphertext_len,
-                                            inline_data: Some(ciphertext),
-                                        },
+                                        kind,
                                         timestamp: chrono::Utc::now(),
                                         channel_id: veil_core::ChannelId::new(),
+                                        expires_at: None,
                                     };
                                     let identity = veil_crypto::Identity::from_bytes(&id_bytes);
                                     match veil_core::SealedMessage::seal(&content, &group_key, &group_id.0, &identity) {
@@ -437,20 +508,7 @@ pub(crate) async fn spawn_network_worker(
                                         }
                                     }
                                 } else {
-                                    // Large file: encrypt, store full copy, shard, send message reference
-                                    let ciphertext = match group_key.encrypt(&file_data) {
-                                        Ok(ct) => ct,
-                                        Err(e) => {
-                                            let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
-                                            continue;
-                                        }
-                                    };
-                                    let blob_id = veil_core::BlobId(
-                                        *blake3::hash(&ciphertext).as_bytes(),
-                                    );
-                                    let ciphertext_len = ciphertext.len() as u64;
-
-                                    // Store full encrypted blob locally (never lose it)
+                                    // Large file: store full copy, shard, send message reference
                                     let _ = store.store_blob_full(&blob_id, &ciphertext);
 
                                     // Erasure-code into shards and store them too
@@ -458,23 +516,57 @@ pub(crate) async fn spawn_network_worker(
                                         for shard in &shards {
                                             let _ = store.store_blob_shard(shard);
                                         }
-                                        // Broadcast shards to peers
                                         for shard in shards {
                                             let _ = manager.broadcast(&WireMessage::BlobShard(shard)).await;
                                         }
                                     }
 
-                                    // Send the message referencing the blob (no inline data)
+                                    let kind = match (&media_type, &image_meta) {
+                                        (veil_core::MediaType::Image, Some(meta)) => {
+                                            veil_core::MessageKind::Image {
+                                                blob_id,
+                                                width: meta.width,
+                                                height: meta.height,
+                                                thumbnail: meta.thumbnail.clone(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        (veil_core::MediaType::Video, _) => {
+                                            veil_core::MessageKind::Video {
+                                                blob_id,
+                                                duration_secs: 0.0,
+                                                thumbnail: Vec::new(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        (veil_core::MediaType::Audio, _) => {
+                                            let (duration_secs, waveform) = match &audio_meta {
+                                                Some(meta) => (meta.duration_secs, meta.waveform.clone()),
+                                                None => (0.0, Vec::new()),
+                                            };
+                                            veil_core::MessageKind::Audio {
+                                                blob_id,
+                                                duration_secs,
+                                                waveform,
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        _ => {
+                                            veil_core::MessageKind::File {
+                                                blob_id,
+                                                filename: filename.clone(),
+                                                size_bytes,
+                                                ciphertext_len,
+                                                inline_data: None,
+                                            }
+                                        }
+                                    };
+
                                     let content = veil_core::MessageContent {
-                                        kind: veil_core::MessageKind::File {
-                                            blob_id,
-                                            filename: filename.clone(),
-                                            size_bytes,
-                                            ciphertext_len,
-                                            inline_data: None,
-                                        },
+                                        kind,
                                         timestamp: chrono::Utc::now(),
                                         channel_id: veil_core::ChannelId::new(),
+                                        expires_at: None,
                                     };
                                     let identity = veil_crypto::Identity::from_bytes(&id_bytes);
                                     match veil_core::SealedMessage::seal(&content, &group_key, &group_id.0, &identity) {
@@ -528,6 +620,75 @@ pub(crate) async fn spawn_network_worker(
                             conn_id,
                             &WireMessage::BlobFull { blob_id, data },
                         ).await;
+                    }
+                    Some(NetCommand::FetchLinkPreviews {
+                        target_id,
+                        urls,
+                        group_id,
+                        group_key,
+                        identity_bytes: id_bytes,
+                    }) => {
+                        let event_tx = event_tx.clone();
+                        let cmd_tx = cmd_tx_internal.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .timeout(std::time::Duration::from_secs(10))
+                                .redirect(reqwest::redirect::Policy::limited(3))
+                                .user_agent("VeilBot/1.0")
+                                .build()
+                                .unwrap_or_default();
+
+                            let mut previews = Vec::new();
+                            // Limit to 5 URLs per message
+                            for url in urls.iter().take(5) {
+                                let resp = match client.get(url).send().await {
+                                    Ok(r) => r,
+                                    Err(_) => continue,
+                                };
+                                let is_html = resp
+                                    .headers()
+                                    .get("content-type")
+                                    .and_then(|v| v.to_str().ok())
+                                    .is_some_and(|ct| ct.contains("text/html"));
+                                if !is_html {
+                                    continue;
+                                }
+                                // Limit body to 256 KB
+                                if let Ok(body) = resp.text().await {
+                                    let truncated = if body.len() > 256 * 1024 {
+                                        &body[..256 * 1024]
+                                    } else {
+                                        &body
+                                    };
+                                    if let Some(preview) = veil_core::parse_embed_metadata(truncated, url) {
+                                        previews.push(preview);
+                                    }
+                                }
+                            }
+
+                            if previews.is_empty() {
+                                return;
+                            }
+
+                            let content = veil_core::MessageContent {
+                                kind: veil_core::MessageKind::LinkPreview {
+                                    target_id,
+                                    previews,
+                                },
+                                timestamp: chrono::Utc::now(),
+                                channel_id: veil_core::ChannelId::new(),
+                                expires_at: None,
+                            };
+                            let identity = veil_crypto::Identity::from_bytes(&id_bytes);
+                            if let Ok(sealed) = veil_core::SealedMessage::seal(
+                                &content, &group_key, &group_id.0, &identity,
+                            ) {
+                                // Route back through the command loop for broadcast + relay
+                                let _ = cmd_tx.send(NetCommand::SendMessage(sealed.clone())).await;
+                                // Notify UI to display the link preview
+                                let _ = event_tx.send(NetworkEvent::PeerData { sealed }).await;
+                            }
+                        });
                     }
                     None => break,
                 }

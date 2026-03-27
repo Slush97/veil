@@ -1,0 +1,18 @@
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.online { background: var(--green); }
+.idle { background: var(--amber); }
+.dnd { background: var(--red); }
+.offline { background: var(--fg-dim); }
+
+.positioned {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+}

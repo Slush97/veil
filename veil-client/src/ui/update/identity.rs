@@ -6,6 +6,20 @@ use crate::ui::network::veil_data_dir;
 use crate::ui::types::*;
 
 impl App {
+    /// Dev-only: skip auth and go straight to chat with a throwaway identity.
+    pub(crate) fn update_dev_login(&mut self) {
+        let (master, _phrase) = MasterIdentity::generate();
+        let device = DeviceIdentity::new(&master, "dev-device".into());
+        self.master = Some(master);
+        self.device = Some(device);
+        self.username = Some("dev".into());
+        if self.relay_addr_input.is_empty() {
+            self.relay_addr_input = DEFAULT_RELAY.to_string();
+        }
+        self.screen = Screen::Chat;
+        self.setup_after_identity();
+    }
+
     pub(crate) fn update_create_identity(&mut self) {
         // Validate username
         let username = self.username_input.trim().to_string();
@@ -16,9 +30,8 @@ impl App {
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '_');
             if !valid {
-                self.registration_status = Some(
-                    "Username must be 3-20 characters (letters, numbers, underscore)".into(),
-                );
+                self.registration_status =
+                    Some("Username must be 3-20 characters (letters, numbers, underscore)".into());
                 return;
             }
         }

@@ -54,6 +54,7 @@ fn seal_send_persist_returns_sealed() {
         kind: veil_core::MessageKind::Text("hello".into()),
         timestamp: chrono::Utc::now(),
         channel_id: ChannelId::new(),
+        expires_at: None,
     };
     let result = app.seal_send_persist(&content);
     assert!(result.is_some());
@@ -67,6 +68,7 @@ fn seal_send_persist_none_without_device() {
         kind: veil_core::MessageKind::Text("hello".into()),
         timestamp: chrono::Utc::now(),
         channel_id: ChannelId::new(),
+        expires_at: None,
     };
     assert!(app.seal_send_persist(&content).is_none());
 }
@@ -79,6 +81,7 @@ fn seal_send_persist_none_without_group() {
         kind: veil_core::MessageKind::Text("hello".into()),
         timestamp: chrono::Utc::now(),
         channel_id: ChannelId::new(),
+        expires_at: None,
     };
     assert!(app.seal_send_persist(&content).is_none());
 }
@@ -214,6 +217,13 @@ fn edit_message_sets_editing_state() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_edit_message(0);
@@ -239,6 +249,13 @@ fn edit_others_message_denied() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_edit_message(0);
@@ -264,6 +281,13 @@ fn confirm_edit_sends_and_updates() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.editing_message = Some(0);
@@ -298,6 +322,13 @@ fn delete_message_marks_deleted() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_delete_message(0);
@@ -338,6 +369,13 @@ fn search_query_filters_messages() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
     app.messages.push(ChatMessage {
         id: None,
@@ -353,6 +391,13 @@ fn search_query_filters_messages() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_search_query("hello".into());
@@ -366,7 +411,10 @@ fn set_display_name_persists() {
     app.display_name_input = "Alice".into();
     app.update_set_display_name();
 
-    assert_eq!(app.display_names.get(&fp).map(String::as_str), Some("Alice"));
+    assert_eq!(
+        app.display_names.get(&fp).map(String::as_str),
+        Some("Alice")
+    );
     assert!(app.display_name_input.is_empty());
 
     let store = app.store.as_ref().unwrap();
@@ -393,6 +441,13 @@ fn react_sends_and_tracks() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_react(0, "\u{1F44D}".into());
@@ -422,6 +477,13 @@ fn reply_to_sets_state() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_reply_to(0);
@@ -439,6 +501,7 @@ fn relay_connected_flushes_pending() {
         kind: veil_core::MessageKind::Text("pending".into()),
         timestamp: chrono::Utc::now(),
         channel_id: ChannelId::new(),
+        expires_at: None,
     };
     let sealed = app.seal_send_persist(&content).unwrap();
     // Drain what seal_send_persist sent
@@ -459,6 +522,13 @@ fn relay_connected_flushes_pending() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
+        expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_relay_connected();

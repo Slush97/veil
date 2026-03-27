@@ -55,6 +55,14 @@ pub enum NetCommand {
     RequestBlob {
         blob_id: BlobId,
     },
+    /// Fetch link previews for URLs in a sent text message and broadcast the result.
+    FetchLinkPreviews {
+        target_id: MessageId,
+        urls: Vec<String>,
+        group_id: GroupId,
+        group_key: Arc<GroupKey>,
+        identity_bytes: [u8; 32],
+    },
 }
 
 /// Events sent from the network worker back to the UI.
@@ -120,8 +128,14 @@ pub enum NetworkEvent {
         message: String,
     },
     // Username registry + contacts
-    RegisterResult { success: bool, message: String },
-    ContactFound { username: String, public_key: [u8; 32] },
+    RegisterResult {
+        success: bool,
+        message: String,
+    },
+    ContactFound {
+        username: String,
+        public_key: [u8; 32],
+    },
     ContactNotFound(String),
     // LAN discovery
     LanPeerDiscovered {
