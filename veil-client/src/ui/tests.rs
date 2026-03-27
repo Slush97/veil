@@ -214,6 +214,7 @@ fn edit_message_sets_editing_state() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
 
     app.update_edit_message(0);
@@ -239,6 +240,7 @@ fn edit_others_message_denied() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
 
     app.update_edit_message(0);
@@ -264,6 +266,7 @@ fn confirm_edit_sends_and_updates() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
 
     app.editing_message = Some(0);
@@ -298,6 +301,7 @@ fn delete_message_marks_deleted() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
 
     app.update_delete_message(0);
@@ -338,6 +342,7 @@ fn search_query_filters_messages() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
     app.messages.push(ChatMessage {
         id: None,
@@ -353,6 +358,7 @@ fn search_query_filters_messages() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
 
     app.update_search_query("hello".into());
@@ -396,6 +402,7 @@ fn react_sends_and_tracks() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
 
     app.update_react(0, "\u{1F44D}".into());
@@ -425,6 +432,7 @@ fn reply_to_sets_state() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
 
     app.update_reply_to(0);
@@ -462,6 +470,7 @@ fn relay_connected_flushes_pending() {
         reply_to_sender: None,
         channel_id: None,
         file_info: None,
+        pinned: false,
     });
 
     app.update_relay_connected();

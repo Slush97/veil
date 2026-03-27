@@ -50,6 +50,7 @@ impl App {
             reply_to_sender: None,
             channel_id: None,
             file_info: None,
+            pinned: false,
         });
     }
 

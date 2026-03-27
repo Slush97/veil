@@ -91,6 +91,7 @@ impl App {
                     reply_to_sender: None,
                     channel_id: Some(channel_id),
                     file_info: None,
+                    pinned: false,
                 };
 
                 // If this was a reply, attach context

@@ -198,11 +198,74 @@ impl App {
                     veil_core::MetadataField::CategoryRemoved { .. } => {
                         "Category removed".to_string()
                     }
-                    veil_core::MetadataField::ChannelMoved { .. } => {
-                        "Channel moved".to_string()
-                    }
+                    veil_core::MetadataField::ChannelMoved { .. } => "Channel moved".to_string(),
                 };
                 self.messages.push(ChatMessage::system(desc));
+            }
+            ControlMessage::ProfileUpdate { fields } => {
+                for field in &fields {
+                    match field {
+                        veil_core::ProfileField::DisplayName(name) => {
+                            let fp = sender.fingerprint();
+                            self.display_names.insert(fp.clone(), name.clone());
+                            if let Some(ref store) = self.store {
+                                let _ = store.store_display_name(&fp, name);
+                            }
+                        }
+                        veil_core::ProfileField::Avatar(blob_id) => {
+                            // Request the avatar blob if we don't have it
+                            if let Some(bid) = blob_id {
+                                let have_it = self
+                                    .store
+                                    .as_ref()
+                                    .and_then(|s| s.get_blob_full(bid).ok())
+                                    .flatten()
+                                    .is_some();
+                                if !have_it {
+                                    if let Some(ref mut tx) = self.net_cmd_tx {
+                                        let _ = tx.try_send(
+                                            crate::ui::message::NetCommand::RequestBlob {
+                                                blob_id: bid.clone(),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        // Bio and Status are stored but don't need special handling
+                        _ => {}
+                    }
+                }
+                let name = self.resolve_display_name(&sender);
+                self.messages
+                    .push(ChatMessage::system(format!("{name} updated their profile")));
+            }
+            ControlMessage::PinMessage {
+                message_id,
+                ..
+            } => {
+                // Mark the message as pinned in our local state
+                for msg in &mut self.messages {
+                    if msg.id.as_ref() == Some(&message_id) {
+                        msg.pinned = true;
+                    }
+                }
+                let name = self.resolve_display_name(&sender);
+                self.messages
+                    .push(ChatMessage::system(format!("{name} pinned a message")));
+            }
+            ControlMessage::UnpinMessage {
+                message_id,
+                ..
+            } => {
+                for msg in &mut self.messages {
+                    if msg.id.as_ref() == Some(&message_id) {
+                        msg.pinned = false;
+                    }
+                }
+                let name = self.resolve_display_name(&sender);
+                self.messages
+                    .push(ChatMessage::system(format!("{name} unpinned a message")));
             }
         }
     }

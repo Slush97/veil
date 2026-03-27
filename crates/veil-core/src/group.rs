@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use veil_crypto::PeerId;
 
-use crate::message::{CategoryId, ChannelId, GroupId};
+use crate::message::{BlobId, CategoryId, ChannelId, GroupId};
 
 /// A group is a community of peers (analogous to a Discord "server").
 /// The group metadata itself is encrypted — pinners don't see any of this.
@@ -69,6 +69,12 @@ pub struct Member {
     pub peer_id: PeerId,
     pub display_name: String,
     pub role: Role,
+    #[serde(default)]
+    pub avatar_blob_id: Option<BlobId>,
+    #[serde(default)]
+    pub bio: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -117,6 +123,9 @@ impl Group {
                 peer_id: creator,
                 display_name: creator_name,
                 role: Role::Owner,
+                avatar_blob_id: None,
+                bio: None,
+                status: None,
             }],
         })
     }
@@ -196,6 +205,9 @@ impl Group {
             peer_id,
             display_name,
             role: Role::Member,
+            avatar_blob_id: None,
+            bio: None,
+            status: None,
         });
     }
 

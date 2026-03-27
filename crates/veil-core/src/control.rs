@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use veil_crypto::{DeviceCertificate, DeviceRevocation, EpochReason, KeyEpoch, KeyPackage, PeerId};
 
 use crate::group::{Role, role_level};
+use crate::message::{BlobId, ChannelId, MessageId};
 
 /// A control message that modifies group state.
 ///
@@ -70,6 +71,32 @@ pub enum ControlMessage {
 
     /// Group metadata was updated (name, description, etc.).
     MetadataUpdate { field: MetadataField, value: String },
+
+    /// A member updated their profile (display name, bio, status, avatar).
+    /// Only the member themselves can update their own profile.
+    ProfileUpdate { fields: Vec<ProfileField> },
+
+    /// Pin a message in a channel. Requires Moderator+ or manage_messages permission.
+    PinMessage {
+        channel_id: ChannelId,
+        message_id: MessageId,
+    },
+
+    /// Unpin a message from a channel.
+    UnpinMessage {
+        channel_id: ChannelId,
+        message_id: MessageId,
+    },
+}
+
+/// A profile field that was updated.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ProfileField {
+    DisplayName(String),
+    Bio(String),
+    Status(String),
+    /// Avatar blob reference. None = avatar removed.
+    Avatar(Option<BlobId>),
 }
 
 /// Which piece of group metadata was updated.
@@ -77,11 +104,23 @@ pub enum ControlMessage {
 pub enum MetadataField {
     GroupName,
     GroupDescription,
-    ChannelAdded { name: String, kind: String },
-    ChannelRemoved { channel_id: String },
-    CategoryAdded { name: String },
-    CategoryRemoved { category_id: String },
-    ChannelMoved { channel_id: String, category_id: Option<String> },
+    ChannelAdded {
+        name: String,
+        kind: String,
+    },
+    ChannelRemoved {
+        channel_id: String,
+    },
+    CategoryAdded {
+        name: String,
+    },
+    CategoryRemoved {
+        category_id: String,
+    },
+    ChannelMoved {
+        channel_id: String,
+        category_id: Option<String>,
+    },
 }
 
 /// Minimum role required to perform each control operation.
@@ -105,6 +144,11 @@ impl ControlMessage {
             ControlMessage::RoleChanged { .. } => Role::Admin,
             // Only admins+ can change metadata
             ControlMessage::MetadataUpdate { .. } => Role::Admin,
+            // Any member can update their own profile
+            ControlMessage::ProfileUpdate { .. } => Role::Member,
+            // Moderators+ can pin/unpin messages
+            ControlMessage::PinMessage { .. } => Role::Moderator,
+            ControlMessage::UnpinMessage { .. } => Role::Moderator,
         }
     }
 
@@ -128,6 +172,8 @@ impl ControlMessage {
             ControlMessage::DeviceRevoked { revocation } => {
                 revocation.master_id == *sender_master_id
             }
+            // Profile updates are implicitly self-only (applied to the sender)
+            ControlMessage::ProfileUpdate { .. } => true,
             _ => true, // Other messages don't have this constraint
         }
     }
