@@ -219,6 +219,11 @@ fn edit_message_sets_editing_state() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_edit_message(0);
@@ -246,6 +251,11 @@ fn edit_others_message_denied() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_edit_message(0);
@@ -273,6 +283,11 @@ fn confirm_edit_sends_and_updates() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.editing_message = Some(0);
@@ -309,6 +324,11 @@ fn delete_message_marks_deleted() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_delete_message(0);
@@ -351,6 +371,11 @@ fn search_query_filters_messages() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
     app.messages.push(ChatMessage {
         id: None,
@@ -368,6 +393,11 @@ fn search_query_filters_messages() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_search_query("hello".into());
@@ -413,6 +443,11 @@ fn react_sends_and_tracks() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_react(0, "\u{1F44D}".into());
@@ -444,6 +479,11 @@ fn reply_to_sets_state() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_reply_to(0);
@@ -484,6 +524,11 @@ fn relay_connected_flushes_pending() {
         file_info: None,
         pinned: false,
         expires_at: None,
+        thumbnail: None,
+        thumbnail_handle: None,
+        image_dimensions: None,
+        audio_info: None,
+        link_previews: Vec::new(),
     });
 
     app.update_relay_connected();

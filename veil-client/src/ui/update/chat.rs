@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use veil_core::{ChannelId, MessageContent, MessageKind};
 use veil_net::WireMessage;
@@ -73,28 +74,22 @@ impl App {
             // if the channel was available to decide Sent vs Sending+queue.
             let had_channel = self.net_cmd_tx.is_some();
 
+            let msg_text = self.message_input.clone();
+
             if let Some(sealed) = self.seal_send_persist(&content) {
-                let mut cm = ChatMessage {
-                    id: Some(sealed.id.clone()),
-                    sender: fingerprint,
-                    sender_id: Some(self.master_peer_id()),
-                    content: self.message_input.clone(),
-                    timestamp: chrono::Utc::now().format("%H:%M").to_string(),
-                    datetime: Some(chrono::Utc::now()),
-                    edited: false,
-                    deleted: false,
-                    status: Some(if had_channel {
-                        MessageStatus::Sent
-                    } else {
-                        MessageStatus::Sending
-                    }),
-                    reply_to_content: None,
-                    reply_to_sender: None,
-                    channel_id: Some(channel_id),
-                    file_info: None,
-                    pinned: false,
-                    expires_at: None,
-                };
+                let mut cm = ChatMessage::user(
+                    sealed.id.clone(),
+                    self.master_peer_id(),
+                    msg_text.clone(),
+                    chrono::Utc::now(),
+                );
+                cm.sender = fingerprint;
+                cm.status = Some(if had_channel {
+                    MessageStatus::Sent
+                } else {
+                    MessageStatus::Sending
+                });
+                cm.channel_id = Some(channel_id);
 
                 // If this was a reply, attach context
                 if let Some(parent_id) = parent_id
@@ -110,7 +105,25 @@ impl App {
                 self.messages.push(cm);
 
                 if !had_channel {
-                    self.pending_messages.push(sealed);
+                    self.pending_messages.push(sealed.clone());
+                }
+
+                // Dispatch link preview fetch for any URLs in the message
+                let urls = veil_core::extract_urls(&msg_text);
+                if !urls.is_empty() {
+                    if let (Some(group), Some(device), Some(tx)) =
+                        (&self.current_group, &self.device, &mut self.net_cmd_tx)
+                    {
+                        if let Ok(ring) = group.key_ring.lock() {
+                            let _ = tx.try_send(NetCommand::FetchLinkPreviews {
+                                target_id: sealed.id.clone(),
+                                urls,
+                                group_id: group.id.clone(),
+                                group_key: Arc::new(ring.current().duplicate()),
+                                identity_bytes: device.device_key_bytes(),
+                            });
+                        }
+                    }
                 }
             }
 

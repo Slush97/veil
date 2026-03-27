@@ -5,7 +5,10 @@ use std::sync::Arc;
 use esox_gfx::{Color, Frame, GpuContext, QuadInstance, RenderResources};
 use esox_platform::esox_input::{self, CursorIcon, Modifiers};
 use esox_platform::{AppDelegate, Clipboard, MouseInputEvent};
-use esox_ui::{ClipboardProvider, InputState, Rect, TabState, TextRenderer, ThemeBuilder, Ui, UiState};
+use esox_ui::{
+    ClipboardProvider, ImageCache, InputState, Rect, TabState, TextRenderer, ThemeBuilder, Ui,
+    UiState,
+};
 
 use veil_core::{ChannelId, GroupId, SealedMessage};
 use veil_crypto::{DeviceIdentity, MasterIdentity, PeerId};
@@ -75,6 +78,15 @@ pub struct App {
     pub(crate) contacts: Vec<(String, [u8; 32])>,
     pub(crate) contact_search_input: String,
     pub(crate) contact_search_result: Option<ContactSearchResult>,
+    // Profile
+    pub(crate) bio_input: String,
+    pub(crate) status_input: String,
+    // Pins
+    pub(crate) show_pins: bool,
+    // Emoji picker
+    pub(crate) emoji_picker_open: bool,
+    pub(crate) emoji_search: String,
+    pub(crate) custom_emoji: Vec<(String, veil_core::BlobId)>,
 }
 
 impl Default for App {
@@ -129,6 +141,15 @@ impl Default for App {
             contacts: Vec::new(),
             contact_search_input: String::new(),
             contact_search_result: None,
+            // Profile
+            bio_input: String::new(),
+            status_input: String::new(),
+            // Pins
+            show_pins: false,
+            // Emoji picker
+            emoji_picker_open: false,
+            emoji_search: String::new(),
+            custom_emoji: Vec::new(),
         }
     }
 }
@@ -438,7 +459,11 @@ pub struct VeilApp {
     pub(crate) input_search: InputState,
     pub(crate) input_contact_search: InputState,
     pub(crate) input_device_name: InputState,
+    pub(crate) input_bio: InputState,
+    pub(crate) input_status: InputState,
+    pub(crate) input_emoji_search: InputState,
     pub(crate) settings_tab: TabState,
+    pub(crate) image_cache: Option<ImageCache>,
 }
 
 impl VeilApp {
@@ -477,7 +502,11 @@ impl VeilApp {
             input_search: InputState::default(),
             input_contact_search: InputState::default(),
             input_device_name: InputState::default(),
+            input_bio: InputState::default(),
+            input_status: InputState::default(),
+            input_emoji_search: InputState::default(),
             settings_tab: TabState::default(),
+            image_cache: None,
         }
     }
 
@@ -544,6 +573,9 @@ impl VeilApp {
         self.app.search_query = self.input_search.text.clone();
         self.app.contact_search_input = self.input_contact_search.text.clone();
         self.app.device_name_input = self.input_device_name.text.clone();
+        self.app.bio_input = self.input_bio.text.clone();
+        self.app.status_input = self.input_status.text.clone();
+        self.app.emoji_search = self.input_emoji_search.text.clone();
     }
 
     /// Sync App string fields → InputState (after updates that clear fields).
@@ -565,6 +597,9 @@ impl VeilApp {
             &self.app.contact_search_input,
         );
         sync_field(&mut self.input_device_name, &self.app.device_name_input);
+        sync_field(&mut self.input_bio, &self.app.bio_input);
+        sync_field(&mut self.input_status, &self.app.status_input);
+        sync_field(&mut self.input_emoji_search, &self.app.emoji_search);
     }
 
     /// Spawn a file picker on a background thread.
@@ -594,6 +629,7 @@ impl AppDelegate for VeilApp {
             Ok(tr) => self.text_renderer = Some(tr),
             Err(e) => eprintln!("failed to initialize text renderer: {e}"),
         }
+        self.image_cache = Some(ImageCache::new(gpu));
     }
 
     fn on_redraw(
@@ -607,6 +643,17 @@ impl AppDelegate for VeilApp {
         self.drain_network_events();
         self.drain_file_picks();
         self.maybe_spawn_network();
+
+        // Pre-load image thumbnails into GPU atlas
+        if let Some(ref mut cache) = self.image_cache {
+            for msg in &mut self.app.messages {
+                if msg.thumbnail_handle.is_none() {
+                    if let Some(ref thumb) = msg.thumbnail {
+                        msg.thumbnail_handle = cache.load_from_bytes(thumb, gpu);
+                    }
+                }
+            }
+        }
 
         // Update theme based on app choice
         self.theme = match self.app.theme_choice {

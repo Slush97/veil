@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use esox_ui::ImageHandle;
 use veil_core::{BlobId, ChannelId, GroupId, MessageId};
 use veil_crypto::{DeviceCertificate, GroupKey, GroupKeyRing, PeerId};
 
@@ -55,6 +56,24 @@ pub(crate) struct FileInfo {
     pub(crate) status: FileStatus,
 }
 
+/// Audio message metadata for waveform display.
+#[derive(Clone, Debug)]
+pub(crate) struct AudioInfo {
+    pub(crate) blob_id: BlobId,
+    pub(crate) duration_secs: f32,
+    pub(crate) waveform: Vec<u8>,
+    pub(crate) status: FileStatus,
+}
+
+/// Link preview metadata for embed cards.
+#[derive(Clone, Debug)]
+pub(crate) struct LinkPreviewInfo {
+    pub(crate) url: String,
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) site_name: Option<String>,
+}
+
 #[derive(Clone)]
 pub(crate) struct GroupState {
     pub(crate) name: String,
@@ -95,6 +114,12 @@ pub(crate) struct ChatMessage {
     pub(crate) file_info: Option<FileInfo>,
     pub(crate) pinned: bool,
     pub(crate) expires_at: Option<i64>,
+    // Media fields
+    pub(crate) thumbnail: Option<Vec<u8>>,
+    pub(crate) thumbnail_handle: Option<ImageHandle>,
+    pub(crate) image_dimensions: Option<(u32, u32)>,
+    pub(crate) audio_info: Option<AudioInfo>,
+    pub(crate) link_previews: Vec<LinkPreviewInfo>,
 }
 
 impl ChatMessage {
@@ -120,6 +145,11 @@ impl ChatMessage {
             file_info: None,
             pinned: false,
             expires_at: None,
+            thumbnail: None,
+            thumbnail_handle: None,
+            image_dimensions: None,
+            audio_info: None,
+            link_previews: Vec::new(),
         }
     }
 
@@ -152,6 +182,11 @@ impl ChatMessage {
             file_info: None,
             pinned: false,
             expires_at: None,
+            thumbnail: None,
+            thumbnail_handle: None,
+            image_dimensions: None,
+            audio_info: None,
+            link_previews: Vec::new(),
         }
     }
 }
