@@ -94,6 +94,7 @@ pub(crate) struct ChatMessage {
     pub(crate) channel_id: Option<ChannelId>,
     pub(crate) file_info: Option<FileInfo>,
     pub(crate) pinned: bool,
+    pub(crate) expires_at: Option<i64>,
 }
 
 impl ChatMessage {
@@ -118,6 +119,7 @@ impl ChatMessage {
             channel_id: None,
             file_info: None,
             pinned: false,
+            expires_at: None,
         }
     }
 
@@ -149,6 +151,7 @@ impl ChatMessage {
             channel_id: None,
             file_info: None,
             pinned: false,
+            expires_at: None,
         }
     }
 }

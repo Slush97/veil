@@ -36,6 +36,9 @@ pub struct Channel {
     pub position: u32,
     /// Per-channel permission overrides. Empty = inherit group defaults.
     pub permission_overrides: Vec<PermissionOverride>,
+    /// If set, all messages in this channel auto-expire after this many seconds.
+    #[serde(default)]
+    pub ephemeral_ttl: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,6 +114,7 @@ impl Group {
             category_id: Some(text_cat.id.clone()),
             position: 0,
             permission_overrides: vec![],
+            ephemeral_ttl: None,
         };
 
         Ok(Self {
@@ -162,6 +166,7 @@ impl Group {
             category_id,
             position,
             permission_overrides: vec![],
+            ephemeral_ttl: None,
         };
         let id = channel.id.clone();
         self.channels.push(channel);

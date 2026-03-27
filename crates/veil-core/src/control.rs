@@ -87,6 +87,13 @@ pub enum ControlMessage {
         channel_id: ChannelId,
         message_id: MessageId,
     },
+
+    /// Set or clear ephemeral mode on a channel. Requires Admin+.
+    SetEphemeral {
+        channel_id: ChannelId,
+        /// TTL in seconds. None = disable ephemeral mode.
+        ttl: Option<u64>,
+    },
 }
 
 /// A profile field that was updated.
@@ -149,6 +156,7 @@ impl ControlMessage {
             // Moderators+ can pin/unpin messages
             ControlMessage::PinMessage { .. } => Role::Moderator,
             ControlMessage::UnpinMessage { .. } => Role::Moderator,
+            ControlMessage::SetEphemeral { .. } => Role::Admin,
         }
     }
 

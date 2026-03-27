@@ -58,6 +58,7 @@ impl App {
                     },
                     timestamp: chrono::Utc::now(),
                     channel_id,
+                    expires_at: None,
                 };
                 if self.seal_send_persist(&content).is_some() {
                     let key = msg_id.0;

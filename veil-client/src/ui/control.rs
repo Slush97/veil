@@ -267,6 +267,14 @@ impl App {
                 self.messages
                     .push(ChatMessage::system(format!("{name} unpinned a message")));
             }
+            ControlMessage::SetEphemeral { ttl, .. } => {
+                let name = self.resolve_display_name(&sender);
+                let desc = match ttl {
+                    Some(t) => format!("{name} set messages to expire after {t}s"),
+                    None => format!("{name} disabled ephemeral messages"),
+                };
+                self.messages.push(ChatMessage::system(desc));
+            }
         }
     }
 }

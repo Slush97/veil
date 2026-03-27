@@ -487,6 +487,7 @@ pub(crate) async fn spawn_network_worker(
                                         kind,
                                         timestamp: chrono::Utc::now(),
                                         channel_id: veil_core::ChannelId::new(),
+                                        expires_at: None,
                                     };
                                     let identity = veil_crypto::Identity::from_bytes(&id_bytes);
                                     match veil_core::SealedMessage::seal(&content, &group_key, &group_id.0, &identity) {
@@ -565,6 +566,7 @@ pub(crate) async fn spawn_network_worker(
                                         kind,
                                         timestamp: chrono::Utc::now(),
                                         channel_id: veil_core::ChannelId::new(),
+                                        expires_at: None,
                                     };
                                     let identity = veil_crypto::Identity::from_bytes(&id_bytes);
                                     match veil_core::SealedMessage::seal(&content, &group_key, &group_id.0, &identity) {
@@ -675,6 +677,7 @@ pub(crate) async fn spawn_network_worker(
                                 },
                                 timestamp: chrono::Utc::now(),
                                 channel_id: veil_core::ChannelId::new(),
+                                expires_at: None,
                             };
                             let identity = veil_crypto::Identity::from_bytes(&id_bytes);
                             if let Ok(sealed) = veil_core::SealedMessage::seal(

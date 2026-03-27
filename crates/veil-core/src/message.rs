@@ -25,6 +25,9 @@ pub struct MessageContent {
     pub kind: MessageKind,
     pub timestamp: DateTime<Utc>,
     pub channel_id: ChannelId,
+    /// Optional expiry time (unix timestamp). Messages past this time should be purged.
+    #[serde(default)]
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -346,6 +349,7 @@ mod tests {
             kind: MessageKind::Text("hello".into()),
             timestamp: Utc::now(),
             channel_id: ChannelId::new(),
+            expires_at: None,
         };
 
         let sealed = SealedMessage::seal(&content, &group_key, &group_id, &identity).unwrap();
@@ -370,6 +374,7 @@ mod tests {
             kind: MessageKind::Text("hello".into()),
             timestamp: Utc::now(),
             channel_id: ChannelId::new(),
+            expires_at: None,
         };
 
         let mut sealed = SealedMessage::seal(&content, &group_key, &group_id, &identity).unwrap();
@@ -393,6 +398,7 @@ mod tests {
             kind: MessageKind::Text("hello".into()),
             timestamp: Utc::now(),
             channel_id: ChannelId::new(),
+            expires_at: None,
         };
 
         // Alice seals, but Bob is the only known member

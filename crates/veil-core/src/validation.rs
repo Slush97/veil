@@ -155,6 +155,7 @@ mod tests {
             kind,
             timestamp: chrono::Utc::now(),
             channel_id: ChannelId::new(),
+            expires_at: None,
         }
     }
 

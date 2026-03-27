@@ -66,6 +66,7 @@ impl App {
                 kind,
                 timestamp: chrono::Utc::now(),
                 channel_id: channel_id.clone(),
+                expires_at: None,
             };
 
             // The helper sends via the channel — but for update_send we need to know
@@ -92,6 +93,7 @@ impl App {
                     channel_id: Some(channel_id),
                     file_info: None,
                     pinned: false,
+                    expires_at: None,
                 };
 
                 // If this was a reply, attach context
@@ -170,6 +172,7 @@ impl App {
                         },
                         timestamp: chrono::Utc::now(),
                         channel_id: ChannelId::new(),
+                        expires_at: None,
                     };
                     if self.seal_send_persist(&content).is_some() {
                         self.messages[idx].content = self.message_input.clone();
@@ -190,6 +193,7 @@ impl App {
                     kind: MessageKind::Delete { target_id: msg_id },
                     timestamp: chrono::Utc::now(),
                     channel_id: ChannelId::new(),
+                    expires_at: None,
                 };
                 if self.seal_send_persist(&content).is_some() {
                     self.messages[idx].deleted = true;

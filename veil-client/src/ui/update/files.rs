@@ -51,6 +51,7 @@ impl App {
             channel_id: None,
             file_info: None,
             pinned: false,
+            expires_at: None,
         });
     }
 
