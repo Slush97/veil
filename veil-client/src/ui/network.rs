@@ -86,6 +86,9 @@ pub(crate) async fn spawn_network_worker(
     // Dedup to prevent duplicate messages from P2P + relay
     let mut dedup = MessageDeduplicator::with_capacity(2048);
 
+    // P2P rate limiting
+    let mut rate_limiter = veil_net::PeerRateLimiter::new(veil_net::RateLimitConfig::default());
+
     // mDNS discovery
     let mut discovery_rx: Option<tokio::sync::mpsc::Receiver<DiscoveryEvent>> = None;
     if let Ok(discovery) = Discovery::new() {
@@ -122,16 +125,22 @@ pub(crate) async fn spawn_network_worker(
             event = event_rx.recv() => {
                 match event {
                     Some(PeerEvent::Connected { conn_id, peer_id, session_key, device_certificate }) => {
+                        rate_limiter.add_peer(conn_id);
                         let _ = event_tx
                             .send(NetworkEvent::PeerConnected { conn_id, peer_id, session_key, device_certificate })
                             .await;
                     }
                     Some(PeerEvent::Disconnected { conn_id }) => {
+                        rate_limiter.remove_peer(conn_id);
                         let _ = event_tx
                             .send(NetworkEvent::PeerDisconnected { conn_id })
                             .await;
                     }
                     Some(PeerEvent::Message { conn_id, message, .. }) => {
+                        if !rate_limiter.check(conn_id) {
+                            tracing::warn!("rate limited peer {conn_id}, dropping message");
+                            continue;
+                        }
                         match message {
                             WireMessage::MessagePush(sealed) => {
                                 if dedup.check(&sealed).is_ok() {
