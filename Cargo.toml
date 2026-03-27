@@ -55,6 +55,11 @@ infer = "0.16"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "ogg", "wav", "flac", "aac", "pcm"] }
 
+# Link preview
+linkify = "0.10"
+scraper = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
 # UI (esox toolkit — local workspace)
 esox_gfx = { path = "../esox/crates/esox_gfx" }
 esox_font = { path = "../esox/crates/esox_font" }

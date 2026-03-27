@@ -18,6 +18,8 @@ zstd.workspace = true
 infer.workspace = true
 image.workspace = true
 symphonia.workspace = true
+linkify.workspace = true
+scraper.workspace = true
 
 [lints]
 workspace = true

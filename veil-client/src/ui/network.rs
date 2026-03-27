@@ -63,6 +63,7 @@ pub(crate) async fn spawn_network_worker(
     let peer_event_tx = manager.event_sender();
 
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<NetCommand>(100);
+    let cmd_tx_internal = cmd_tx.clone();
 
     let _ = event_tx
         .send(NetworkEvent::NetworkReady { local_addr, cmd_tx })
@@ -608,6 +609,74 @@ pub(crate) async fn spawn_network_worker(
                             conn_id,
                             &WireMessage::BlobFull { blob_id, data },
                         ).await;
+                    }
+                    Some(NetCommand::FetchLinkPreviews {
+                        target_id,
+                        urls,
+                        group_id,
+                        group_key,
+                        identity_bytes: id_bytes,
+                    }) => {
+                        let event_tx = event_tx.clone();
+                        let cmd_tx = cmd_tx_internal.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder()
+                                .timeout(std::time::Duration::from_secs(10))
+                                .redirect(reqwest::redirect::Policy::limited(3))
+                                .user_agent("VeilBot/1.0")
+                                .build()
+                                .unwrap_or_default();
+
+                            let mut previews = Vec::new();
+                            // Limit to 5 URLs per message
+                            for url in urls.iter().take(5) {
+                                let resp = match client.get(url).send().await {
+                                    Ok(r) => r,
+                                    Err(_) => continue,
+                                };
+                                let is_html = resp
+                                    .headers()
+                                    .get("content-type")
+                                    .and_then(|v| v.to_str().ok())
+                                    .is_some_and(|ct| ct.contains("text/html"));
+                                if !is_html {
+                                    continue;
+                                }
+                                // Limit body to 256 KB
+                                if let Ok(body) = resp.text().await {
+                                    let truncated = if body.len() > 256 * 1024 {
+                                        &body[..256 * 1024]
+                                    } else {
+                                        &body
+                                    };
+                                    if let Some(preview) = veil_core::parse_embed_metadata(truncated, url) {
+                                        previews.push(preview);
+                                    }
+                                }
+                            }
+
+                            if previews.is_empty() {
+                                return;
+                            }
+
+                            let content = veil_core::MessageContent {
+                                kind: veil_core::MessageKind::LinkPreview {
+                                    target_id,
+                                    previews,
+                                },
+                                timestamp: chrono::Utc::now(),
+                                channel_id: veil_core::ChannelId::new(),
+                            };
+                            let identity = veil_crypto::Identity::from_bytes(&id_bytes);
+                            if let Ok(sealed) = veil_core::SealedMessage::seal(
+                                &content, &group_key, &group_id.0, &identity,
+                            ) {
+                                // Route back through the command loop for broadcast + relay
+                                let _ = cmd_tx.send(NetCommand::SendMessage(sealed.clone())).await;
+                                // Notify UI to display the link preview
+                                let _ = event_tx.send(NetworkEvent::PeerData { sealed }).await;
+                            }
+                        });
                     }
                     None => break,
                 }

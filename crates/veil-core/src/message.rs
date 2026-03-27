@@ -79,6 +79,27 @@ pub enum MessageKind {
         waveform: Vec<u8>,
         ciphertext_len: u64,
     },
+    /// Link preview metadata for URLs found in a previously-sent text message.
+    /// Sent as a follow-up after the original text message.
+    LinkPreview {
+        target_id: MessageId,
+        previews: Vec<EmbedPreview>,
+    },
+}
+
+/// Metadata extracted from a URL for link preview display.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmbedPreview {
+    /// The URL that was fetched.
+    pub url: String,
+    /// Page title (from `<title>` or `og:title`).
+    pub title: Option<String>,
+    /// Page description (from meta description or `og:description`).
+    pub description: Option<String>,
+    /// URL of a preview image (`og:image`). Not fetched — just the URL.
+    pub image_url: Option<String>,
+    /// Site name (`og:site_name`).
+    pub site_name: Option<String>,
 }
 
 /// Derive an opaque routing tag from a group ID.
