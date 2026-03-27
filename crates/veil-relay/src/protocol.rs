@@ -85,6 +85,68 @@ pub enum RelayMessage {
 
     Ping(u64),
     Pong(u64),
+
+    // ── Voice / Video (v3) ─────────────────────────────────────────────
+
+    /// Client → Relay: join a voice channel.
+    /// The relay creates (or joins) a voice room and returns an SDP offer.
+    VoiceJoin {
+        /// blake3("veil-voice-room-id", group_id || channel_name)
+        room_id: [u8; 32],
+        /// The group this room belongs to.
+        group_id: [u8; 32],
+    },
+
+    /// Relay → Client: SDP offer for the WebRTC session.
+    VoiceOffer {
+        room_id: [u8; 32],
+        participant_id: u64,
+        sdp: String,
+        /// UDP address of the relay's voice endpoint (host:port).
+        voice_endpoint: String,
+        /// Current participants already in the room (peer_id_bytes each).
+        participants: Vec<[u8; 32]>,
+    },
+
+    /// Client → Relay: SDP answer completing the WebRTC handshake.
+    VoiceAnswer {
+        room_id: [u8; 32],
+        participant_id: u64,
+        sdp: String,
+    },
+
+    /// Bidirectional: trickle ICE candidate exchange.
+    VoiceIceCandidate {
+        room_id: [u8; 32],
+        participant_id: u64,
+        candidate: String,
+    },
+
+    /// Client → Relay: leave a voice channel.
+    VoiceLeave {
+        room_id: [u8; 32],
+    },
+
+    /// Relay → Client: a participant joined the voice room.
+    VoiceParticipantJoined {
+        room_id: [u8; 32],
+        peer_id_bytes: [u8; 32],
+    },
+
+    /// Relay → Client: a participant left the voice room.
+    VoiceParticipantLeft {
+        room_id: [u8; 32],
+        peer_id_bytes: [u8; 32],
+    },
+
+    /// Relay → Client: speaking indicator derived from RTP audio-level
+    /// header extensions (RFC 6464). Not part of encrypted payload.
+    VoiceSpeaking {
+        room_id: [u8; 32],
+        peer_id_bytes: [u8; 32],
+        /// Audio level 0–127 from RTP header extension.
+        audio_level: u8,
+    },
 }
 
 /// A queued message in the mailbox.
@@ -106,7 +168,7 @@ pub enum StatusCode {
 }
 
 /// Current relay protocol version.
-pub const RELAY_PROTOCOL_VERSION: u32 = 2;
+pub const RELAY_PROTOCOL_VERSION: u32 = 3;
 
 impl RelayMessage {
     fn bincode_options() -> impl bincode::Options {

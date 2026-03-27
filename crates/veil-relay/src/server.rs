@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 use crate::directory::DirectoryStore;
 use crate::mailbox::MailboxStore;
 use crate::protocol::*;
+use crate::voice::{VoiceConfig, VoiceModule, VoiceSignal, VoiceSignalOut};
 
 /// Relay configuration — sensible defaults for low-resource devices.
 pub struct RelayConfig {
@@ -31,6 +32,8 @@ pub struct RelayConfig {
     pub db_path: PathBuf,
     /// Max age for mailbox messages before purging.
     pub max_age: Duration,
+    /// Voice/video SFU configuration. `None` disables voice.
+    pub voice_config: Option<VoiceConfig>,
 }
 
 impl Default for RelayConfig {
@@ -44,12 +47,13 @@ impl Default for RelayConfig {
             max_forwards_per_second: 50,
             db_path: PathBuf::from("./mailbox.redb"),
             max_age: Duration::from_secs(86400),
+            voice_config: Some(VoiceConfig::default()),
         }
     }
 }
 
 /// Identifies a connected client.
-type ClientId = u64;
+pub type ClientId = u64;
 
 struct ClientState {
     /// Opaque peer identity bytes (Ed25519 public key).
@@ -278,6 +282,7 @@ pub struct RelayServer {
     config_bind_addr: SocketAddr,
     #[allow(dead_code)]
     config_max_age: Duration,
+    voice_config: Option<VoiceConfig>,
 }
 
 impl RelayServer {
@@ -301,6 +306,7 @@ impl RelayServer {
 
         let bind_addr = config.bind_addr;
         let max_age = config.max_age;
+        let voice_config = config.voice_config;
         Self {
             state: Arc::new(RwLock::new(RelayState::new(
                 config.max_tags_per_client,
@@ -311,6 +317,7 @@ impl RelayServer {
             directory_store,
             config_bind_addr: bind_addr,
             config_max_age: max_age,
+            voice_config,
         }
     }
 
@@ -334,6 +341,36 @@ impl RelayServer {
             }
         });
 
+        // Spawn voice module if enabled.
+        let voice_signal_tx = if let Some(ref vc) = self.voice_config {
+            let (signal_tx, signal_rx) = mpsc::channel::<VoiceSignal>(1024);
+            let (out_tx, mut out_rx) = mpsc::channel::<VoiceSignalOut>(1024);
+
+            match VoiceModule::new(vc.clone()).await {
+                Ok(voice_module) => {
+                    tokio::spawn(async move {
+                        voice_module.run(signal_rx, out_tx).await;
+                    });
+
+                    // Route voice signals back to clients via their mpsc channels.
+                    let state_for_voice = self.state.clone();
+                    tokio::spawn(async move {
+                        while let Some(signal) = out_rx.recv().await {
+                            route_voice_signal_to_clients(&state_for_voice, signal).await;
+                        }
+                    });
+
+                    Some(signal_tx)
+                }
+                Err(e) => {
+                    warn!("Failed to start voice module: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         loop {
             let incoming = match endpoint.accept().await {
                 Some(conn) => conn,
@@ -342,12 +379,15 @@ impl RelayServer {
 
             let state = self.state.clone();
             let directory = self.directory_store.clone();
+            let voice_tx = voice_signal_tx.clone();
             tokio::spawn(async move {
                 match incoming.await {
                     Ok(conn) => {
                         let addr = conn.remote_address();
                         debug!("client connected: {addr}");
-                        if let Err(e) = handle_client(state, directory, conn).await {
+                        if let Err(e) =
+                            handle_client(state, directory, conn, voice_tx).await
+                        {
                             debug!("client {addr} disconnected: {e}");
                         }
                     }
@@ -366,6 +406,7 @@ async fn handle_client(
     state: Arc<RwLock<RelayState>>,
     directory: Arc<DirectoryStore>,
     conn: quinn::Connection,
+    voice_tx: Option<mpsc::Sender<VoiceSignal>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = conn.remote_address();
 
@@ -443,7 +484,7 @@ async fn handle_client(
     });
 
     // Reader loop: process incoming messages from client.
-    let result = reader_loop(state.clone(), directory, &conn, client_id).await;
+    let result = reader_loop(state.clone(), directory, &conn, client_id, &voice_tx).await;
 
     // Cleanup.
     writer.abort();
@@ -451,6 +492,14 @@ async fn handle_client(
         let mut s = state.write().await;
         s.remove_client(client_id);
     }
+
+    // Notify voice module of disconnection.
+    if let Some(vtx) = voice_tx {
+        let _ = vtx
+            .send(VoiceSignal::ClientDisconnected { client_id })
+            .await;
+    }
+
     info!("client {addr} disconnected (id={client_id})");
 
     result
@@ -461,6 +510,7 @@ async fn reader_loop(
     directory: Arc<DirectoryStore>,
     conn: &quinn::Connection,
     client_id: ClientId,
+    voice_tx: &Option<mpsc::Sender<VoiceSignal>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     loop {
         let msg = recv_relay_message(conn).await?;
@@ -670,8 +720,145 @@ async fn reader_loop(
                 send_relay_message(conn, &RelayMessage::Pong(seq)).await?;
             }
 
+            // ── Voice signaling ───────────────────────────────────
+            RelayMessage::VoiceJoin { room_id, group_id } => {
+                if let Some(vtx) = voice_tx {
+                    let peer_id_bytes = {
+                        let s = state.read().await;
+                        match s.clients.get(&client_id) {
+                            Some(c) => c.peer_id_bytes,
+                            None => continue,
+                        }
+                    };
+                    let _ = vtx
+                        .send(VoiceSignal::Join {
+                            room_id,
+                            group_id,
+                            client_id,
+                            peer_id_bytes,
+                        })
+                        .await;
+                }
+            }
+
+            RelayMessage::VoiceAnswer {
+                room_id,
+                participant_id,
+                sdp,
+            } => {
+                if let Some(vtx) = voice_tx {
+                    let _ = vtx
+                        .send(VoiceSignal::Answer {
+                            room_id,
+                            participant_id,
+                            sdp,
+                        })
+                        .await;
+                }
+            }
+
+            RelayMessage::VoiceIceCandidate {
+                room_id,
+                participant_id,
+                candidate,
+            } => {
+                if let Some(vtx) = voice_tx {
+                    let _ = vtx
+                        .send(VoiceSignal::IceCandidate {
+                            room_id,
+                            participant_id,
+                            candidate,
+                        })
+                        .await;
+                }
+            }
+
+            RelayMessage::VoiceLeave { room_id } => {
+                if let Some(vtx) = voice_tx {
+                    let _ = vtx
+                        .send(VoiceSignal::Leave {
+                            room_id,
+                            client_id,
+                        })
+                        .await;
+                }
+            }
+
             // Ignore messages that only the relay sends.
             _ => {}
+        }
+    }
+}
+
+/// Route voice module output signals back to the appropriate clients.
+async fn route_voice_signal_to_clients(
+    state: &Arc<RwLock<RelayState>>,
+    signal: VoiceSignalOut,
+) {
+    let s = state.read().await;
+
+    match signal {
+        VoiceSignalOut::Offer {
+            client_id,
+            room_id,
+            participant_id,
+            sdp,
+            voice_endpoint,
+            participants,
+        } => {
+            if let Some(client) = s.clients.get(&client_id) {
+                let _ = client.tx.try_send(RelayMessage::VoiceOffer {
+                    room_id,
+                    participant_id,
+                    sdp,
+                    voice_endpoint,
+                    participants,
+                });
+            }
+        }
+        VoiceSignalOut::ParticipantJoined {
+            room_id,
+            peer_id_bytes,
+            notify,
+        } => {
+            for cid in notify {
+                if let Some(client) = s.clients.get(&cid) {
+                    let _ = client.tx.try_send(RelayMessage::VoiceParticipantJoined {
+                        room_id,
+                        peer_id_bytes,
+                    });
+                }
+            }
+        }
+        VoiceSignalOut::ParticipantLeft {
+            room_id,
+            peer_id_bytes,
+            notify,
+        } => {
+            for cid in notify {
+                if let Some(client) = s.clients.get(&cid) {
+                    let _ = client.tx.try_send(RelayMessage::VoiceParticipantLeft {
+                        room_id,
+                        peer_id_bytes,
+                    });
+                }
+            }
+        }
+        VoiceSignalOut::Speaking {
+            room_id,
+            peer_id_bytes,
+            audio_level,
+            notify,
+        } => {
+            for cid in notify {
+                if let Some(client) = s.clients.get(&cid) {
+                    let _ = client.tx.try_send(RelayMessage::VoiceSpeaking {
+                        room_id,
+                        peer_id_bytes,
+                        audio_level,
+                    });
+                }
+            }
         }
     }
 }

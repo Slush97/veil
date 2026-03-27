@@ -10,6 +10,7 @@ pub mod directory;
 pub mod mailbox;
 pub mod protocol;
 pub mod server;
+pub mod voice;
 
 pub use directory::DirectoryStore;
 pub use mailbox::MailboxStore;

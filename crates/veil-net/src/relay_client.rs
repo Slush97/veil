@@ -36,6 +36,32 @@ pub enum RelayEvent {
         username: String,
         public_key: Option<[u8; 32]>,
     },
+    // ── Voice ──────────────────────────────────────────────
+    VoiceOffer {
+        room_id: [u8; 32],
+        participant_id: u64,
+        sdp: String,
+        voice_endpoint: String,
+        participants: Vec<[u8; 32]>,
+    },
+    VoiceIceCandidate {
+        room_id: [u8; 32],
+        participant_id: u64,
+        candidate: String,
+    },
+    VoiceParticipantJoined {
+        room_id: [u8; 32],
+        peer_id_bytes: [u8; 32],
+    },
+    VoiceParticipantLeft {
+        room_id: [u8; 32],
+        peer_id_bytes: [u8; 32],
+    },
+    VoiceSpeaking {
+        room_id: [u8; 32],
+        peer_id_bytes: [u8; 32],
+        audio_level: u8,
+    },
 }
 
 /// Commands sent to the relay client from the application.
@@ -55,6 +81,24 @@ pub enum RelayCommand {
     },
     LookupUser(String),
     Shutdown,
+    // ── Voice ──────────────────────────────────────────────
+    VoiceJoin {
+        room_id: [u8; 32],
+        group_id: [u8; 32],
+    },
+    VoiceAnswer {
+        room_id: [u8; 32],
+        participant_id: u64,
+        sdp: String,
+    },
+    VoiceIceCandidate {
+        room_id: [u8; 32],
+        participant_id: u64,
+        candidate: String,
+    },
+    VoiceLeave {
+        room_id: [u8; 32],
+    },
 }
 
 /// A client that connects to a veil-relay server over QUIC.
@@ -157,6 +201,60 @@ impl RelayClient {
     /// Shut down the relay client.
     pub async fn shutdown(&self) {
         let _ = self.cmd_tx.send(RelayCommand::Shutdown).await;
+    }
+
+    /// Join a voice channel.
+    pub async fn voice_join(
+        &self,
+        room_id: [u8; 32],
+        group_id: [u8; 32],
+    ) -> Result<(), NetError> {
+        self.cmd_tx
+            .send(RelayCommand::VoiceJoin { room_id, group_id })
+            .await
+            .map_err(|_| NetError::Connection("relay client shut down".into()))
+    }
+
+    /// Send SDP answer for a voice session.
+    pub async fn voice_answer(
+        &self,
+        room_id: [u8; 32],
+        participant_id: u64,
+        sdp: String,
+    ) -> Result<(), NetError> {
+        self.cmd_tx
+            .send(RelayCommand::VoiceAnswer {
+                room_id,
+                participant_id,
+                sdp,
+            })
+            .await
+            .map_err(|_| NetError::Connection("relay client shut down".into()))
+    }
+
+    /// Send ICE candidate for a voice session.
+    pub async fn voice_ice_candidate(
+        &self,
+        room_id: [u8; 32],
+        participant_id: u64,
+        candidate: String,
+    ) -> Result<(), NetError> {
+        self.cmd_tx
+            .send(RelayCommand::VoiceIceCandidate {
+                room_id,
+                participant_id,
+                candidate,
+            })
+            .await
+            .map_err(|_| NetError::Connection("relay client shut down".into()))
+    }
+
+    /// Leave a voice channel.
+    pub async fn voice_leave(&self, room_id: [u8; 32]) -> Result<(), NetError> {
+        self.cmd_tx
+            .send(RelayCommand::VoiceLeave { room_id })
+            .await
+            .map_err(|_| NetError::Connection("relay client shut down".into()))
     }
 }
 
@@ -340,6 +438,18 @@ async fn connect_and_run(
             RelayCommand::LookupUser(username) => {
                 send_relay_msg(&conn, &RelayMessage::Lookup { username }).await?;
             }
+            RelayCommand::VoiceJoin { room_id, group_id } => {
+                send_relay_msg(&conn, &RelayMessage::VoiceJoin { room_id, group_id }).await?;
+            }
+            RelayCommand::VoiceAnswer { room_id, participant_id, sdp } => {
+                send_relay_msg(&conn, &RelayMessage::VoiceAnswer { room_id, participant_id, sdp }).await?;
+            }
+            RelayCommand::VoiceIceCandidate { room_id, participant_id, candidate } => {
+                send_relay_msg(&conn, &RelayMessage::VoiceIceCandidate { room_id, participant_id, candidate }).await?;
+            }
+            RelayCommand::VoiceLeave { room_id } => {
+                send_relay_msg(&conn, &RelayMessage::VoiceLeave { room_id }).await?;
+            }
             RelayCommand::Shutdown => {
                 return Ok(ShutdownReason::CommandShutdown);
             }
@@ -368,6 +478,21 @@ async fn connect_and_run(
                         }
                         RelayMessage::LookupResult { username, public_key } => {
                             let _ = event_tx.send(RelayEvent::LookupResult { username, public_key }).await;
+                        }
+                        RelayMessage::VoiceOffer { room_id, participant_id, sdp, voice_endpoint, participants } => {
+                            let _ = event_tx.send(RelayEvent::VoiceOffer { room_id, participant_id, sdp, voice_endpoint, participants }).await;
+                        }
+                        RelayMessage::VoiceIceCandidate { room_id, participant_id, candidate } => {
+                            let _ = event_tx.send(RelayEvent::VoiceIceCandidate { room_id, participant_id, candidate }).await;
+                        }
+                        RelayMessage::VoiceParticipantJoined { room_id, peer_id_bytes } => {
+                            let _ = event_tx.send(RelayEvent::VoiceParticipantJoined { room_id, peer_id_bytes }).await;
+                        }
+                        RelayMessage::VoiceParticipantLeft { room_id, peer_id_bytes } => {
+                            let _ = event_tx.send(RelayEvent::VoiceParticipantLeft { room_id, peer_id_bytes }).await;
+                        }
+                        RelayMessage::VoiceSpeaking { room_id, peer_id_bytes, audio_level } => {
+                            let _ = event_tx.send(RelayEvent::VoiceSpeaking { room_id, peer_id_bytes, audio_level }).await;
                         }
                         RelayMessage::Pong(_) => {}
                         RelayMessage::Status { code, message } => {
@@ -413,6 +538,18 @@ async fn connect_and_run(
                     }
                     Some(RelayCommand::LookupUser(username)) => {
                         send_relay_msg(&conn, &RelayMessage::Lookup { username }).await?;
+                    }
+                    Some(RelayCommand::VoiceJoin { room_id, group_id }) => {
+                        send_relay_msg(&conn, &RelayMessage::VoiceJoin { room_id, group_id }).await?;
+                    }
+                    Some(RelayCommand::VoiceAnswer { room_id, participant_id, sdp }) => {
+                        send_relay_msg(&conn, &RelayMessage::VoiceAnswer { room_id, participant_id, sdp }).await?;
+                    }
+                    Some(RelayCommand::VoiceIceCandidate { room_id, participant_id, candidate }) => {
+                        send_relay_msg(&conn, &RelayMessage::VoiceIceCandidate { room_id, participant_id, candidate }).await?;
+                    }
+                    Some(RelayCommand::VoiceLeave { room_id }) => {
+                        send_relay_msg(&conn, &RelayMessage::VoiceLeave { room_id }).await?;
                     }
                     Some(RelayCommand::Shutdown) | None => {
                         return Ok(ShutdownReason::CommandShutdown);

@@ -6,7 +6,6 @@ members = [
     "crates/veil-net",
     "crates/veil-relay",
     "crates/veil-store",
-    "veil-client",
     "veil-app/src-tauri",
 ]
 
