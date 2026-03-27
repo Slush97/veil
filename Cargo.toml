@@ -50,6 +50,10 @@ reed-solomon-erasure = "6"
 # Compression
 zstd = "0.13"
 
+# Media
+infer = "0.16"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+
 # UI (esox toolkit — local workspace)
 esox_gfx = { path = "../esox/crates/esox_gfx" }
 esox_font = { path = "../esox/crates/esox_font" }

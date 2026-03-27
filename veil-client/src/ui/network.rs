@@ -394,34 +394,69 @@ pub(crate) async fn spawn_network_worker(
                             Ok(file_data) => {
                                 let size_bytes = file_data.len() as u64;
 
+                                // Detect media type for auto-routing
+                                let media_type = veil_core::detect_media(&file_data, Some(&filename));
+                                let image_meta = if media_type == veil_core::MediaType::Image {
+                                    veil_core::extract_image_meta(&file_data)
+                                } else {
+                                    None
+                                };
+
+                                // Compress and encrypt
+                                let compressed = match veil_core::compress(&file_data) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
+                                        continue;
+                                    }
+                                };
+                                let ciphertext = match group_key.encrypt(&compressed) {
+                                    Ok(ct) => ct,
+                                    Err(e) => {
+                                        let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
+                                        continue;
+                                    }
+                                };
+                                let blob_id = veil_core::BlobId(
+                                    *blake3::hash(&ciphertext).as_bytes(),
+                                );
+                                let ciphertext_len = ciphertext.len() as u64;
+
                                 if file_data.len() < veil_store::INLINE_THRESHOLD {
-                                    // Small file: compress, encrypt, and send inline
-                                    let compressed = match veil_core::compress(&file_data) {
-                                        Ok(c) => c,
-                                        Err(e) => {
-                                            let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
-                                            continue;
+                                    // Small file: store blob for media types, inline for generic files
+                                    let kind = match (&media_type, &image_meta) {
+                                        (veil_core::MediaType::Image, Some(meta)) => {
+                                            let _ = store.store_blob_full(&blob_id, &ciphertext);
+                                            veil_core::MessageKind::Image {
+                                                blob_id,
+                                                width: meta.width,
+                                                height: meta.height,
+                                                thumbnail: meta.thumbnail.clone(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        (veil_core::MediaType::Video, _) => {
+                                            let _ = store.store_blob_full(&blob_id, &ciphertext);
+                                            veil_core::MessageKind::Video {
+                                                blob_id,
+                                                duration_secs: 0.0,
+                                                thumbnail: Vec::new(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        _ => {
+                                            veil_core::MessageKind::File {
+                                                blob_id,
+                                                filename: filename.clone(),
+                                                size_bytes,
+                                                ciphertext_len,
+                                                inline_data: Some(ciphertext),
+                                            }
                                         }
                                     };
-                                    let ciphertext = match group_key.encrypt(&compressed) {
-                                        Ok(ct) => ct,
-                                        Err(e) => {
-                                            let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
-                                            continue;
-                                        }
-                                    };
-                                    let blob_id = veil_core::BlobId(
-                                        *blake3::hash(&ciphertext).as_bytes(),
-                                    );
-                                    let ciphertext_len = ciphertext.len() as u64;
+
                                     let content = veil_core::MessageContent {
-                                        kind: veil_core::MessageKind::File {
-                                            blob_id,
-                                            filename: filename.clone(),
-                                            size_bytes,
-                                            ciphertext_len,
-                                            inline_data: Some(ciphertext),
-                                        },
+                                        kind,
                                         timestamp: chrono::Utc::now(),
                                         channel_id: veil_core::ChannelId::new(),
                                     };
@@ -444,27 +479,7 @@ pub(crate) async fn spawn_network_worker(
                                         }
                                     }
                                 } else {
-                                    // Large file: compress, encrypt, store full copy, shard, send message reference
-                                    let compressed = match veil_core::compress(&file_data) {
-                                        Ok(c) => c,
-                                        Err(e) => {
-                                            let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
-                                            continue;
-                                        }
-                                    };
-                                    let ciphertext = match group_key.encrypt(&compressed) {
-                                        Ok(ct) => ct,
-                                        Err(e) => {
-                                            let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
-                                            continue;
-                                        }
-                                    };
-                                    let blob_id = veil_core::BlobId(
-                                        *blake3::hash(&ciphertext).as_bytes(),
-                                    );
-                                    let ciphertext_len = ciphertext.len() as u64;
-
-                                    // Store full encrypted blob locally (never lose it)
+                                    // Large file: store full copy, shard, send message reference
                                     let _ = store.store_blob_full(&blob_id, &ciphertext);
 
                                     // Erasure-code into shards and store them too
@@ -472,21 +487,42 @@ pub(crate) async fn spawn_network_worker(
                                         for shard in &shards {
                                             let _ = store.store_blob_shard(shard);
                                         }
-                                        // Broadcast shards to peers
                                         for shard in shards {
                                             let _ = manager.broadcast(&WireMessage::BlobShard(shard)).await;
                                         }
                                     }
 
-                                    // Send the message referencing the blob (no inline data)
+                                    let kind = match (&media_type, &image_meta) {
+                                        (veil_core::MediaType::Image, Some(meta)) => {
+                                            veil_core::MessageKind::Image {
+                                                blob_id,
+                                                width: meta.width,
+                                                height: meta.height,
+                                                thumbnail: meta.thumbnail.clone(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        (veil_core::MediaType::Video, _) => {
+                                            veil_core::MessageKind::Video {
+                                                blob_id,
+                                                duration_secs: 0.0,
+                                                thumbnail: Vec::new(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        _ => {
+                                            veil_core::MessageKind::File {
+                                                blob_id,
+                                                filename: filename.clone(),
+                                                size_bytes,
+                                                ciphertext_len,
+                                                inline_data: None,
+                                            }
+                                        }
+                                    };
+
                                     let content = veil_core::MessageContent {
-                                        kind: veil_core::MessageKind::File {
-                                            blob_id,
-                                            filename: filename.clone(),
-                                            size_bytes,
-                                            ciphertext_len,
-                                            inline_data: None,
-                                        },
+                                        kind,
                                         timestamp: chrono::Utc::now(),
                                         channel_id: veil_core::ChannelId::new(),
                                     };
