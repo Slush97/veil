@@ -126,6 +126,12 @@ impl App {
             {
                 drop(ring);
 
+                // Validate message content (field lengths, structural limits)
+                if let Err(e) = veil_core::validate(&content) {
+                    tracing::warn!("rejected invalid message from {}: {e}", sender.fingerprint());
+                    break;
+                }
+
                 // Track unread for non-active groups
                 let is_active = self
                     .current_group
