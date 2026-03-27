@@ -275,6 +275,34 @@ impl App {
                 };
                 self.messages.push(ChatMessage::system(desc));
             }
+            ControlMessage::AddEmoji {
+                shortcode, blob_id, ..
+            } => {
+                // Request the emoji blob if we don't have it
+                let have_it = self
+                    .store
+                    .as_ref()
+                    .and_then(|s| s.get_blob_full(&blob_id).ok())
+                    .flatten()
+                    .is_some();
+                if !have_it {
+                    if let Some(ref mut tx) = self.net_cmd_tx {
+                        let _ = tx.try_send(crate::ui::message::NetCommand::RequestBlob {
+                            blob_id,
+                        });
+                    }
+                }
+                let name = self.resolve_display_name(&sender);
+                self.messages.push(ChatMessage::system(format!(
+                    "{name} added emoji :{shortcode}:"
+                )));
+            }
+            ControlMessage::RemoveEmoji { shortcode } => {
+                let name = self.resolve_display_name(&sender);
+                self.messages.push(ChatMessage::system(format!(
+                    "{name} removed emoji :{shortcode}:"
+                )));
+            }
         }
     }
 }

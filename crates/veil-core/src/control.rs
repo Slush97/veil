@@ -94,6 +94,17 @@ pub enum ControlMessage {
         /// TTL in seconds. None = disable ephemeral mode.
         ttl: Option<u64>,
     },
+
+    /// Add a custom emoji to the group. Requires Moderator+.
+    AddEmoji {
+        shortcode: String,
+        blob_id: BlobId,
+    },
+
+    /// Remove a custom emoji from the group. Requires Moderator+.
+    RemoveEmoji {
+        shortcode: String,
+    },
 }
 
 /// A profile field that was updated.
@@ -157,6 +168,8 @@ impl ControlMessage {
             ControlMessage::PinMessage { .. } => Role::Moderator,
             ControlMessage::UnpinMessage { .. } => Role::Moderator,
             ControlMessage::SetEphemeral { .. } => Role::Admin,
+            ControlMessage::AddEmoji { .. } => Role::Moderator,
+            ControlMessage::RemoveEmoji { .. } => Role::Moderator,
         }
     }
 

@@ -1,6 +1,7 @@
 pub mod compression;
 pub mod control;
 pub mod dedup;
+pub mod emoji;
 pub mod group;
 pub mod invite;
 pub mod link;
@@ -10,6 +11,7 @@ pub mod validation;
 
 pub use compression::{CompressionError, compress, decompress};
 pub use control::{ControlMessage, MetadataField, ProfileField};
+pub use emoji::{CustomEmoji, is_valid_shortcode, parse_shortcodes};
 pub use link::{extract_urls, parse_embed_metadata};
 pub use media::{
     AudioMeta, ImageMeta, MediaType, detect as detect_media, extract_audio_meta,
