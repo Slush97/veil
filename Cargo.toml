@@ -53,6 +53,7 @@ zstd = "0.13"
 # Media
 infer = "0.16"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "ogg", "wav", "flac", "aac", "pcm"] }
 
 # UI (esox toolkit — local workspace)
 esox_gfx = { path = "../esox/crates/esox_gfx" }

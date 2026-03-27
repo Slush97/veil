@@ -8,7 +8,10 @@ pub mod message;
 
 pub use compression::{CompressionError, compress, decompress};
 pub use control::{ControlMessage, MetadataField};
-pub use media::{ImageMeta, MediaType, detect as detect_media, extract_image_meta};
+pub use media::{
+    AudioMeta, ImageMeta, MediaType, detect as detect_media, extract_audio_meta,
+    extract_image_meta,
+};
 pub use dedup::{DeduplicateError, MessageDeduplicator};
 pub use group::{
     Category, Channel, ChannelKind, Group, GroupError, Member, PermissionOverride, Permissions,

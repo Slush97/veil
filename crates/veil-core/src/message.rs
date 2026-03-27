@@ -70,6 +70,15 @@ pub enum MessageKind {
     },
     /// A control message for group state changes (key rotation, membership, etc.).
     Control(ControlMessage),
+    /// Audio message with duration and waveform visualization data.
+    Audio {
+        blob_id: BlobId,
+        /// Duration in seconds (0.0 if unknown).
+        duration_secs: f32,
+        /// Low-resolution waveform: 64 amplitude samples normalized to 0–255.
+        waveform: Vec<u8>,
+        ciphertext_len: u64,
+    },
 }
 
 /// Derive an opaque routing tag from a group ID.

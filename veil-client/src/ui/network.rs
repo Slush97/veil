@@ -401,6 +401,11 @@ pub(crate) async fn spawn_network_worker(
                                 } else {
                                     None
                                 };
+                                let audio_meta = if media_type == veil_core::MediaType::Audio {
+                                    veil_core::extract_audio_meta(&file_data)
+                                } else {
+                                    None
+                                };
 
                                 // Compress and encrypt
                                 let compressed = match veil_core::compress(&file_data) {
@@ -441,6 +446,19 @@ pub(crate) async fn spawn_network_worker(
                                                 blob_id,
                                                 duration_secs: 0.0,
                                                 thumbnail: Vec::new(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        (veil_core::MediaType::Audio, _) => {
+                                            let _ = store.store_blob_full(&blob_id, &ciphertext);
+                                            let (duration_secs, waveform) = match &audio_meta {
+                                                Some(meta) => (meta.duration_secs, meta.waveform.clone()),
+                                                None => (0.0, Vec::new()),
+                                            };
+                                            veil_core::MessageKind::Audio {
+                                                blob_id,
+                                                duration_secs,
+                                                waveform,
                                                 ciphertext_len,
                                             }
                                         }
@@ -507,6 +525,18 @@ pub(crate) async fn spawn_network_worker(
                                                 blob_id,
                                                 duration_secs: 0.0,
                                                 thumbnail: Vec::new(),
+                                                ciphertext_len,
+                                            }
+                                        }
+                                        (veil_core::MediaType::Audio, _) => {
+                                            let (duration_secs, waveform) = match &audio_meta {
+                                                Some(meta) => (meta.duration_secs, meta.waveform.clone()),
+                                                None => (0.0, Vec::new()),
+                                            };
+                                            veil_core::MessageKind::Audio {
+                                                blob_id,
+                                                duration_secs,
+                                                waveform,
                                                 ciphertext_len,
                                             }
                                         }
