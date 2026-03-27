@@ -1,0 +1,138 @@
+.strip {
+  width: var(--server-strip-width);
+  min-width: var(--server-strip-width);
+  background: var(--bg-base);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-sm) 0;
+  gap: var(--space-sm);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.strip::-webkit-scrollbar {
+  width: 0;
+}
+
+/* Home / DM button */
+.homeButton {
+  width: var(--server-icon-size);
+  height: var(--server-icon-size);
+  border-radius: 50%;
+  background: var(--bg-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  transition:
+    border-radius var(--transition-normal),
+    background var(--transition-normal),
+    color var(--transition-normal);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.homeButton:hover,
+.homeButton.active {
+  border-radius: 16px;
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Server icon */
+.serverIcon {
+  position: relative;
+  width: var(--server-icon-size);
+  height: var(--server-icon-size);
+  border-radius: 50%;
+  background: var(--bg-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-radius var(--transition-normal),
+    background var(--transition-normal),
+    color var(--transition-normal);
+}
+
+.serverIcon:hover {
+  border-radius: 16px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.serverIcon.active {
+  border-radius: 16px;
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Active pill indicator (left side) */
+.pill {
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  border-radius: 0 4px 4px 0;
+  background: var(--fg);
+  transition: height var(--transition-normal);
+}
+
+.pill.hover {
+  height: 20px;
+}
+
+.pill.active {
+  height: 40px;
+}
+
+.pill.unread {
+  height: 8px;
+}
+
+/* Unread badge on server icon */
+.unreadBadge {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+}
+
+/* Separator line */
+.separator {
+  width: 32px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* Add server button */
+.addButton {
+  width: var(--server-icon-size);
+  height: var(--server-icon-size);
+  border-radius: 50%;
+  background: var(--bg-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--green);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-radius var(--transition-normal),
+    background var(--transition-normal);
+}
+
+.addButton:hover {
+  border-radius: 16px;
+  background: var(--green);
+  color: #fff;
+}

@@ -1,0 +1,39 @@
+[package]
+name = "veil-app"
+version.workspace = true
+edition.workspace = true
+description = "Veil — encrypted decentralized messenger"
+authors = ["esoc"]
+
+[lib]
+name = "veil_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = "1"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Veil crates
+veil-core = { workspace = true }
+veil-crypto = { workspace = true }
+veil-net = { workspace = true }
+veil-store = { workspace = true }
+veil-relay = { workspace = true }
+
+# Shared dependencies
+blake3 = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+gethostname = "0.5"

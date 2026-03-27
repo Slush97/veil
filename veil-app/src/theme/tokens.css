@@ -1,0 +1,108 @@
+:root,
+[data-theme="dark"] {
+  /* Backgrounds — layered from darkest to lightest */
+  --bg-base: #0e1013;
+  --bg-surface: #14171b;
+  --bg-raised: #1c2025;
+  --bg-input: #23272d;
+  --bg-message-hover: #1a1d22;
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+
+  /* Foreground */
+  --fg: #e7e9ed;
+  --fg-muted: #8b919c;
+  --fg-dim: #616670;
+  --fg-label: #babec5;
+
+  /* Accent — teal */
+  --accent: #5BA4B5;
+  --accent-hover: #72B7C7;
+  --accent-dim: rgba(91, 164, 181, 0.15);
+  --accent-text: #5BA4B5;
+
+  /* Status */
+  --green: #4dbe77;
+  --amber: #e3b241;
+  --red: #e06562;
+
+  /* Borders */
+  --border: #2a2f36;
+  --border-subtle: #1f2328;
+
+  /* Scrollbar */
+  --scrollbar-thumb: #3a3f46;
+  --scrollbar-track: transparent;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 28px;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+
+  /* Spacing — 4px grid */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 50%;
+
+  /* Transitions */
+  --transition-fast: 120ms ease-out;
+  --transition-normal: 150ms ease-out;
+  --transition-slow: 200ms ease-out;
+
+  /* Layout dimensions */
+  --server-strip-width: 56px;
+  --sidebar-width: 240px;
+  --member-list-width: 240px;
+  --avatar-sm: 24px;
+  --avatar-md: 32px;
+  --avatar-lg: 40px;
+  --avatar-xl: 48px;
+  --server-icon-size: 48px;
+}
+
+[data-theme="light"] {
+  --bg-base: #e3e5e8;
+  --bg-surface: #f2f3f5;
+  --bg-raised: #ffffff;
+  --bg-input: #e9eaed;
+  --bg-message-hover: #f5f5f5;
+  --bg-overlay: rgba(0, 0, 0, 0.4);
+
+  --fg: #1a1a1a;
+  --fg-muted: #5c6370;
+  --fg-dim: #8a8f98;
+  --fg-label: #4a4e56;
+
+  --accent: #4a8f9e;
+  --accent-hover: #5BA4B5;
+  --accent-dim: rgba(74, 143, 158, 0.12);
+  --accent-text: #3d7a88;
+
+  --border: #d4d6da;
+  --border-subtle: #e6e8eb;
+
+  --scrollbar-thumb: #c4c6ca;
+}
