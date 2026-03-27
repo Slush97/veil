@@ -3,6 +3,9 @@ use veil_crypto::GroupKey;
 
 use crate::StoreError;
 
+/// Maximum decompressed blob size (256 MiB).
+const MAX_BLOB_SIZE: usize = 256 * 1024 * 1024;
+
 /// Files smaller than this are sent inline in the message (no sharding).
 pub const INLINE_THRESHOLD: usize = 1_048_576; // 1 MiB
 
@@ -31,9 +34,11 @@ pub fn encode_blob(
     plaintext: &[u8],
     group_key: &GroupKey,
 ) -> Result<(Vec<BlobShard>, usize), StoreError> {
-    // Encrypt first — shards never contain plaintext
+    // Compress, then encrypt — shards never contain plaintext
+    let compressed = veil_core::compress(plaintext)
+        .map_err(|e| StoreError::Compression(e.to_string()))?;
     let ciphertext = group_key
-        .encrypt(plaintext)
+        .encrypt(&compressed)
         .map_err(|e| StoreError::Crypto(e.to_string()))?;
 
     let ciphertext_len = ciphertext.len();
@@ -120,10 +125,12 @@ pub fn decode_blob(
     }
     ciphertext.truncate(original_ciphertext_len);
 
-    // Decrypt
-    group_key
+    // Decrypt, then decompress
+    let decrypted = group_key
         .decrypt(&ciphertext)
-        .map_err(|e| StoreError::Crypto(e.to_string()))
+        .map_err(|e| StoreError::Crypto(e.to_string()))?;
+    veil_core::decompress(&decrypted, MAX_BLOB_SIZE)
+        .map_err(|e| StoreError::Compression(e.to_string()))
 }
 
 #[cfg(test)]

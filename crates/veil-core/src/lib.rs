@@ -1,9 +1,11 @@
+pub mod compression;
 pub mod control;
 pub mod dedup;
 pub mod group;
 pub mod invite;
 pub mod message;
 
+pub use compression::{CompressionError, compress, decompress};
 pub use control::{ControlMessage, MetadataField};
 pub use dedup::{DeduplicateError, MessageDeduplicator};
 pub use group::{

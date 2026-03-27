@@ -3,7 +3,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use veil_crypto::{DeviceCertificate, GroupKey, GroupKeyRing, Identity, PeerId};
 
+use crate::compression;
 use crate::control::ControlMessage;
+
+/// Maximum decompressed size for message plaintext (16 MiB).
+const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 /// Unique identifier for a message (content-addressed).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,9 +102,11 @@ impl SealedMessage {
         group_id: &[u8; 32],
         identity: &Identity,
     ) -> Result<Self, veil_crypto::EncryptError> {
-        let plaintext = bincode::serialize(content)
+        let serialized = bincode::serialize(content)
             .map_err(|_| veil_crypto::EncryptError::SerializationFailed)?;
-        let ciphertext = group_key.encrypt(&plaintext)?;
+        let compressed = compression::compress(&serialized)
+            .map_err(|_| veil_crypto::EncryptError::SerializationFailed)?;
+        let ciphertext = group_key.encrypt(&compressed)?;
         let id = MessageId::from_content(&ciphertext);
 
         // Derive opaque routing tag
@@ -153,10 +159,12 @@ impl SealedMessage {
 
         let sender = sender.ok_or(SealedMessageError::InvalidSignature)?;
 
-        // Decrypt
-        let plaintext = group_key
+        // Decrypt and decompress
+        let decrypted = group_key
             .decrypt(&self.ciphertext)
             .map_err(|_| SealedMessageError::DecryptionFailed)?;
+        let plaintext = compression::decompress(&decrypted, MAX_MESSAGE_SIZE)
+            .map_err(SealedMessageError::DecompressionFailed)?;
 
         let content: MessageContent = bincode::deserialize(&plaintext)
             .map_err(|_| SealedMessageError::DeserializationFailed)?;
@@ -210,10 +218,12 @@ impl SealedMessage {
 
         let sender = sender.ok_or(SealedMessageError::InvalidSignature)?;
 
-        // Decrypt
-        let plaintext = group_key
+        // Decrypt and decompress
+        let decrypted = group_key
             .decrypt(&self.ciphertext)
             .map_err(|_| SealedMessageError::DecryptionFailed)?;
+        let plaintext = compression::decompress(&decrypted, MAX_MESSAGE_SIZE)
+            .map_err(SealedMessageError::DecompressionFailed)?;
 
         let content: MessageContent = bincode::deserialize(&plaintext)
             .map_err(|_| SealedMessageError::DeserializationFailed)?;
@@ -244,6 +254,8 @@ pub enum SealedMessageError {
     InvalidSignature,
     #[error("decryption failed")]
     DecryptionFailed,
+    #[error("decompression failed: {0}")]
+    DecompressionFailed(#[from] crate::compression::CompressionError),
     #[error("deserialization failed")]
     DeserializationFailed,
     #[error("key generation mismatch")]

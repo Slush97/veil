@@ -90,10 +90,11 @@ impl App {
         if let Some(ref store) = self.store {
             match store.get_blob_full(&blob_id) {
                 Ok(Some(encrypted_data)) => {
-                    // Decrypt with group key
+                    // Decrypt and decompress with group key
                     let decrypted = self.current_group.as_ref().and_then(|group| {
                         let ring = group.key_ring.lock().ok()?;
-                        ring.current().decrypt(&encrypted_data).ok()
+                        let raw = ring.current().decrypt(&encrypted_data).ok()?;
+                        veil_core::decompress(&raw, 256 * 1024 * 1024).ok()
                     });
 
                     match decrypted {

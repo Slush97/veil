@@ -395,8 +395,15 @@ pub(crate) async fn spawn_network_worker(
                                 let size_bytes = file_data.len() as u64;
 
                                 if file_data.len() < veil_store::INLINE_THRESHOLD {
-                                    // Small file: encrypt and send inline
-                                    let ciphertext = match group_key.encrypt(&file_data) {
+                                    // Small file: compress, encrypt, and send inline
+                                    let compressed = match veil_core::compress(&file_data) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
+                                            continue;
+                                        }
+                                    };
+                                    let ciphertext = match group_key.encrypt(&compressed) {
                                         Ok(ct) => ct,
                                         Err(e) => {
                                             let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
@@ -437,8 +444,15 @@ pub(crate) async fn spawn_network_worker(
                                         }
                                     }
                                 } else {
-                                    // Large file: encrypt, store full copy, shard, send message reference
-                                    let ciphertext = match group_key.encrypt(&file_data) {
+                                    // Large file: compress, encrypt, store full copy, shard, send message reference
+                                    let compressed = match veil_core::compress(&file_data) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
+                                            continue;
+                                        }
+                                    };
+                                    let ciphertext = match group_key.encrypt(&compressed) {
                                         Ok(ct) => ct,
                                         Err(e) => {
                                             let _ = event_tx.send(NetworkEvent::FileFailed(e.to_string())).await;
