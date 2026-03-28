@@ -53,8 +53,7 @@ pub fn parse_embed_metadata(html: &str, url: &str) -> Option<EmbedPreview> {
 
 /// Extract `content` attribute from `<meta property="og:..." content="...">`.
 fn og_content(doc: &scraper::Html, property: &str) -> Option<String> {
-    let selector =
-        scraper::Selector::parse(&format!("meta[property=\"{property}\"]")).ok()?;
+    let selector = scraper::Selector::parse(&format!("meta[property=\"{property}\"]")).ok()?;
     doc.select(&selector)
         .next()
         .and_then(|el| el.value().attr("content"))
@@ -72,8 +71,7 @@ fn html_title(doc: &scraper::Html) -> Option<String> {
 
 /// Extract `content` attribute from `<meta name="..." content="...">`.
 fn meta_content(doc: &scraper::Html, name: &str) -> Option<String> {
-    let selector =
-        scraper::Selector::parse(&format!("meta[name=\"{name}\"]")).ok()?;
+    let selector = scraper::Selector::parse(&format!("meta[name=\"{name}\"]")).ok()?;
     doc.select(&selector)
         .next()
         .and_then(|el| el.value().attr("content"))
@@ -122,7 +120,10 @@ mod tests {
         let preview = parse_embed_metadata(html, "https://example.com").unwrap();
         assert_eq!(preview.title.as_deref(), Some("My Page"));
         assert_eq!(preview.description.as_deref(), Some("A cool page"));
-        assert_eq!(preview.image_url.as_deref(), Some("https://example.com/img.png"));
+        assert_eq!(
+            preview.image_url.as_deref(),
+            Some("https://example.com/img.png")
+        );
         assert_eq!(preview.site_name.as_deref(), Some("Example"));
     }
 

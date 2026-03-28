@@ -87,7 +87,6 @@ pub enum RelayMessage {
     Pong(u64),
 
     // ── Voice / Video (v3) ─────────────────────────────────────────────
-
     /// Client → Relay: join a voice channel.
     /// The relay creates (or joins) a voice room and returns an SDP offer.
     VoiceJoin {

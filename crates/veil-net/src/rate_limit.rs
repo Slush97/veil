@@ -72,7 +72,8 @@ impl PeerRateLimiter {
         // Replenish tokens based on elapsed time
         let now = Instant::now();
         let elapsed = now.duration_since(bucket.last_replenish).as_secs_f64();
-        bucket.tokens = (bucket.tokens + elapsed * self.config.max_per_second).min(self.config.burst);
+        bucket.tokens =
+            (bucket.tokens + elapsed * self.config.max_per_second).min(self.config.burst);
         bucket.last_replenish = now;
 
         // Try to consume one token

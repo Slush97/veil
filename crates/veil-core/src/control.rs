@@ -96,15 +96,10 @@ pub enum ControlMessage {
     },
 
     /// Add a custom emoji to the group. Requires Moderator+.
-    AddEmoji {
-        shortcode: String,
-        blob_id: BlobId,
-    },
+    AddEmoji { shortcode: String, blob_id: BlobId },
 
     /// Remove a custom emoji from the group. Requires Moderator+.
-    RemoveEmoji {
-        shortcode: String,
-    },
+    RemoveEmoji { shortcode: String },
 }
 
 /// A profile field that was updated.

@@ -35,8 +35,8 @@ pub fn encode_blob(
     group_key: &GroupKey,
 ) -> Result<(Vec<BlobShard>, usize), StoreError> {
     // Compress, then encrypt — shards never contain plaintext
-    let compressed = veil_core::compress(plaintext)
-        .map_err(|e| StoreError::Compression(e.to_string()))?;
+    let compressed =
+        veil_core::compress(plaintext).map_err(|e| StoreError::Compression(e.to_string()))?;
     let ciphertext = group_key
         .encrypt(&compressed)
         .map_err(|e| StoreError::Crypto(e.to_string()))?;

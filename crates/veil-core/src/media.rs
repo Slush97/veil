@@ -109,7 +109,12 @@ pub fn extract_audio_meta(data: &[u8]) -> Option<AudioMeta> {
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
     let probe = symphonia::default::get_probe()
-        .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &Hint::new(),
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .ok()?;
 
     let mut format = probe.format;

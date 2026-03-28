@@ -385,9 +385,7 @@ impl RelayServer {
                     Ok(conn) => {
                         let addr = conn.remote_address();
                         debug!("client connected: {addr}");
-                        if let Err(e) =
-                            handle_client(state, directory, conn, voice_tx).await
-                        {
+                        if let Err(e) = handle_client(state, directory, conn, voice_tx).await {
                             debug!("client {addr} disconnected: {e}");
                         }
                     }
@@ -775,12 +773,7 @@ async fn reader_loop(
 
             RelayMessage::VoiceLeave { room_id } => {
                 if let Some(vtx) = voice_tx {
-                    let _ = vtx
-                        .send(VoiceSignal::Leave {
-                            room_id,
-                            client_id,
-                        })
-                        .await;
+                    let _ = vtx.send(VoiceSignal::Leave { room_id, client_id }).await;
                 }
             }
 
@@ -791,10 +784,7 @@ async fn reader_loop(
 }
 
 /// Route voice module output signals back to the appropriate clients.
-async fn route_voice_signal_to_clients(
-    state: &Arc<RwLock<RelayState>>,
-    signal: VoiceSignalOut,
-) {
+async fn route_voice_signal_to_clients(state: &Arc<RwLock<RelayState>>, signal: VoiceSignalOut) {
     let s = state.read().await;
 
     match signal {

@@ -204,11 +204,7 @@ impl RelayClient {
     }
 
     /// Join a voice channel.
-    pub async fn voice_join(
-        &self,
-        room_id: [u8; 32],
-        group_id: [u8; 32],
-    ) -> Result<(), NetError> {
+    pub async fn voice_join(&self, room_id: [u8; 32], group_id: [u8; 32]) -> Result<(), NetError> {
         self.cmd_tx
             .send(RelayCommand::VoiceJoin { room_id, group_id })
             .await
@@ -441,11 +437,35 @@ async fn connect_and_run(
             RelayCommand::VoiceJoin { room_id, group_id } => {
                 send_relay_msg(&conn, &RelayMessage::VoiceJoin { room_id, group_id }).await?;
             }
-            RelayCommand::VoiceAnswer { room_id, participant_id, sdp } => {
-                send_relay_msg(&conn, &RelayMessage::VoiceAnswer { room_id, participant_id, sdp }).await?;
+            RelayCommand::VoiceAnswer {
+                room_id,
+                participant_id,
+                sdp,
+            } => {
+                send_relay_msg(
+                    &conn,
+                    &RelayMessage::VoiceAnswer {
+                        room_id,
+                        participant_id,
+                        sdp,
+                    },
+                )
+                .await?;
             }
-            RelayCommand::VoiceIceCandidate { room_id, participant_id, candidate } => {
-                send_relay_msg(&conn, &RelayMessage::VoiceIceCandidate { room_id, participant_id, candidate }).await?;
+            RelayCommand::VoiceIceCandidate {
+                room_id,
+                participant_id,
+                candidate,
+            } => {
+                send_relay_msg(
+                    &conn,
+                    &RelayMessage::VoiceIceCandidate {
+                        room_id,
+                        participant_id,
+                        candidate,
+                    },
+                )
+                .await?;
             }
             RelayCommand::VoiceLeave { room_id } => {
                 send_relay_msg(&conn, &RelayMessage::VoiceLeave { room_id }).await?;

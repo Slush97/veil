@@ -61,9 +61,8 @@ pub fn decompress(data: &[u8], max_size: usize) -> Result<Vec<u8>, CompressionEr
         match data[1] {
             FORMAT_RAW => Ok(data[2..].to_vec()),
             FORMAT_ZSTD => {
-                let decompressed =
-                    zstd::decode_all(std::io::Cursor::new(&data[2..]))
-                        .map_err(|e| CompressionError::DecompressFailed(e.to_string()))?;
+                let decompressed = zstd::decode_all(std::io::Cursor::new(&data[2..]))
+                    .map_err(|e| CompressionError::DecompressFailed(e.to_string()))?;
                 if decompressed.len() > max_size {
                     return Err(CompressionError::SizeLimitExceeded {
                         size: decompressed.len(),
@@ -120,7 +119,10 @@ mod tests {
         let data = vec![0xAA; 10_000];
         let compressed = compress(&data).unwrap();
         let result = decompress(&compressed, 100);
-        assert!(matches!(result, Err(CompressionError::SizeLimitExceeded { .. })));
+        assert!(matches!(
+            result,
+            Err(CompressionError::SizeLimitExceeded { .. })
+        ));
     }
 
     #[test]
