@@ -72,9 +72,7 @@ pub enum VoiceSignal {
         client_id: ClientId,
     },
     /// Internal: client disconnected from QUIC, clean up any voice sessions.
-    ClientDisconnected {
-        client_id: ClientId,
-    },
+    ClientDisconnected { client_id: ClientId },
 }
 
 /// Signals flowing from the voice module back to the QUIC relay.
@@ -125,12 +123,15 @@ struct VoiceParticipant {
     remote_addr: Option<SocketAddr>,
     /// Mids this participant is sending to us (we receive from them).
     sending_mids: Vec<Mid>,
-    /// Map: receiver_mid on this participant → (source_participant_id, source_mid).
-    forwarding_map: HashMap<Mid, (ParticipantId, Mid)>,
+    /// Map: sendonly mid on this participant → source participant whose audio it carries.
+    forwarding_map: HashMap<Mid, ParticipantId>,
     /// Data channel for SDP renegotiation (if established).
     data_channel: Option<ChannelId>,
     /// Pending SDP offer awaiting answer.
     pending_offer: Option<PendingOffer>,
+    /// Queue of participant IDs that need renegotiation (sendonly track added) once
+    /// the current pending offer is resolved.
+    pending_renegotiations: Vec<ParticipantId>,
 }
 
 struct VoiceRoom {
@@ -152,7 +153,10 @@ impl VoiceRoom {
     }
 
     fn participant_peer_ids(&self) -> Vec<[u8; 32]> {
-        self.participants.values().map(|p| p.peer_id_bytes).collect()
+        self.participants
+            .values()
+            .map(|p| p.peer_id_bytes)
+            .collect()
     }
 
     fn client_ids(&self) -> Vec<ClientId> {
@@ -189,7 +193,9 @@ pub struct VoiceModule {
 }
 
 impl VoiceModule {
-    pub async fn new(config: VoiceConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn new(
+        config: VoiceConfig,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let udp_socket = UdpSocket::bind(config.udp_bind_addr).await?;
         let local_addr = udp_socket.local_addr()?;
         info!("Voice module listening on UDP {local_addr}");
@@ -314,7 +320,17 @@ impl VoiceModule {
                 participant_id,
                 sdp,
             } => {
-                self.handle_answer(room_id, participant_id, &sdp);
+                if let Some((room_id, existing_pid, new_pid)) =
+                    self.handle_answer(room_id, participant_id, &sdp)
+                {
+                    self.renegotiate_existing_participant(
+                        room_id,
+                        existing_pid,
+                        new_pid,
+                        signal_tx,
+                    )
+                    .await;
+                }
             }
             VoiceSignal::IceCandidate {
                 room_id,
@@ -365,41 +381,29 @@ impl VoiceModule {
         room.next_participant_id += 1;
 
         // Create str0m Rtc instance in ICE-lite mode (server has known address).
-        let mut rtc = RtcConfig::new()
-            .set_ice_lite(true)
-            .build(Instant::now());
+        let mut rtc = RtcConfig::new().set_ice_lite(true).build(Instant::now());
 
         // Register our local address as an ICE candidate.
-        if let Ok(candidate) =
-            str0m::Candidate::host(self.local_addr, Protocol::Udp)
-        {
+        if let Ok(candidate) = str0m::Candidate::host(self.local_addr, Protocol::Udp) {
             rtc.add_local_candidate(candidate);
         }
+
+        // Collect existing participant IDs before mutating.
+        let existing_pids: Vec<ParticipantId> = room.participants.keys().copied().collect();
 
         // Create SDP offer: receive audio from this peer, send audio for
         // each existing participant.
         let mut sdp_api = rtc.sdp_api();
 
         // Audio track: we receive audio from this participant.
-        sdp_api.add_media(
-            MediaKind::Audio,
-            Direction::RecvOnly,
-            None,
-            None,
-            None,
-        );
+        let _recv_mid = sdp_api.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None);
 
         // For each existing participant, add a sendonly audio track so we can
-        // forward their audio to this new joiner.
-        let existing_count = room.participants.len();
-        for _ in 0..existing_count {
-            sdp_api.add_media(
-                MediaKind::Audio,
-                Direction::SendOnly,
-                None,
-                None,
-                None,
-            );
+        // forward their audio to this new joiner. Capture the Mid for each.
+        let mut forwarding_map = HashMap::new();
+        for &existing_pid in &existing_pids {
+            let mid = sdp_api.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
+            forwarding_map.insert(mid, existing_pid);
         }
 
         // Add data channel for potential renegotiation.
@@ -421,11 +425,12 @@ impl VoiceModule {
             rtc,
             remote_addr: None,
             sending_mids: Vec::new(),
-            forwarding_map: HashMap::new(),
+            forwarding_map,
             data_channel: None,
             pending_offer: Some(PendingOffer {
                 offer: pending_offer,
             }),
+            pending_renegotiations: Vec::new(),
         };
 
         room.participants.insert(participant_id, participant);
@@ -459,34 +464,57 @@ impl VoiceModule {
                 })
                 .await;
         }
+
+        // Renegotiate existing participants so they get a sendonly track
+        // carrying the new joiner's audio.
+        for &existing_pid in &existing_pids {
+            self.renegotiate_existing_participant(room_id, existing_pid, participant_id, signal_tx)
+                .await;
+        }
     }
 
-    fn handle_answer(&mut self, room_id: VoiceRoomId, participant_id: ParticipantId, sdp: &str) {
+    /// Handle an SDP answer. Returns `Some((room_id, participant_id, next_pid))` if
+    /// a queued renegotiation should be triggered next.
+    fn handle_answer(
+        &mut self,
+        room_id: VoiceRoomId,
+        participant_id: ParticipantId,
+        sdp: &str,
+    ) -> Option<(VoiceRoomId, ParticipantId, ParticipantId)> {
         let Some(room) = self.rooms.get_mut(&room_id) else {
             warn!("Answer for unknown room");
-            return;
+            return None;
         };
         let Some(participant) = room.participants.get_mut(&participant_id) else {
             warn!("Answer for unknown participant {participant_id}");
-            return;
+            return None;
         };
 
         let Some(pending) = participant.pending_offer.take() else {
             warn!("Answer without pending offer for participant {participant_id}");
-            return;
+            return None;
         };
 
         let answer = match SdpAnswer::from_sdp_string(sdp) {
             Ok(a) => a,
             Err(e) => {
                 error!("Failed to parse SDP answer: {e}");
-                return;
+                return None;
             }
         };
 
         let sdp_api = participant.rtc.sdp_api();
         if let Err(e) = sdp_api.accept_answer(pending.offer, answer) {
             error!("Failed to accept SDP answer: {e}");
+            return None;
+        }
+
+        // Drain one queued renegotiation if any.
+        if !participant.pending_renegotiations.is_empty() {
+            let next_pid = participant.pending_renegotiations.remove(0);
+            Some((room_id, participant_id, next_pid))
+        } else {
+            None
         }
     }
 
@@ -532,6 +560,16 @@ impl VoiceModule {
         room.participants.remove(&participant_id);
         self.client_to_participant.remove(&client_id);
 
+        // Clean up forwarding maps and renegotiation queues on remaining participants.
+        for remaining in room.participants.values_mut() {
+            remaining
+                .forwarding_map
+                .retain(|_, &mut src_pid| src_pid != participant_id);
+            remaining
+                .pending_renegotiations
+                .retain(|&pid| pid != participant_id);
+        }
+
         // Clean up address mapping.
         self.addr_to_participant
             .retain(|_, (rid, pid)| !(*rid == room_id && *pid == participant_id));
@@ -570,13 +608,65 @@ impl VoiceModule {
         }
     }
 
+    /// Renegotiate an existing participant's connection to add a sendonly track
+    /// for a newly joined participant's audio.
+    async fn renegotiate_existing_participant(
+        &mut self,
+        room_id: VoiceRoomId,
+        existing_pid: ParticipantId,
+        new_pid: ParticipantId,
+        signal_tx: &mpsc::Sender<VoiceSignalOut>,
+    ) {
+        let Some(room) = self.rooms.get_mut(&room_id) else {
+            return;
+        };
+        let Some(participant) = room.participants.get_mut(&existing_pid) else {
+            return;
+        };
+
+        // If there's already a pending offer, queue this renegotiation.
+        if participant.pending_offer.is_some() {
+            debug!("Queueing renegotiation for participant {existing_pid} (pending offer exists)");
+            participant.pending_renegotiations.push(new_pid);
+            return;
+        }
+
+        let mut sdp_api = participant.rtc.sdp_api();
+        let mid = sdp_api.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
+
+        let Some((offer, pending_offer)) = sdp_api.apply() else {
+            warn!("No SDP changes for renegotiation of participant {existing_pid}");
+            return;
+        };
+
+        // This sendonly mid carries audio from new_pid.
+        participant.forwarding_map.insert(mid, new_pid);
+        participant.pending_offer = Some(PendingOffer {
+            offer: pending_offer,
+        });
+
+        let client_id = participant.client_id;
+        let offer_sdp = offer.to_sdp_string();
+        let current_participants = room.participant_peer_ids();
+
+        info!("Renegotiating participant {existing_pid} for new joiner {new_pid}");
+
+        let _ = signal_tx
+            .send(VoiceSignalOut::Offer {
+                client_id,
+                room_id,
+                participant_id: existing_pid,
+                sdp: offer_sdp,
+                voice_endpoint: self.local_addr.to_string(),
+                participants: current_participants,
+            })
+            .await;
+    }
+
     // ── Polling all Rtc instances ─────────────────────────────────────
 
     /// Poll all Rtc instances for outputs. Returns the next timeout.
-    async fn poll_all_rtc(
-        &mut self,
-        signal_tx: &mpsc::Sender<VoiceSignalOut>,
-    ) -> Instant {
+    async fn poll_all_rtc(&mut self, signal_tx: &mpsc::Sender<VoiceSignalOut>) -> Instant {
         let mut earliest_timeout = Instant::now() + Duration::from_millis(100);
 
         // Collect media events to forward after iterating.
@@ -614,16 +704,10 @@ impl VoiceModule {
                         Ok(Output::Event(event)) => {
                             match event {
                                 Event::Connected => {
-                                    info!(
-                                        "Participant {} WebRTC connected",
-                                        participant.id
-                                    );
+                                    info!("Participant {} WebRTC connected", participant.id);
                                 }
                                 Event::IceConnectionStateChange(state) => {
-                                    debug!(
-                                        "Participant {} ICE state: {state:?}",
-                                        participant.id
-                                    );
+                                    debug!("Participant {} ICE state: {state:?}", participant.id);
                                     if state == IceConnectionState::Disconnected {
                                         disconnected.push((room_id, participant.client_id));
                                     }
@@ -643,18 +727,11 @@ impl VoiceModule {
                                     }
                                 }
                                 Event::MediaData(media_data) => {
-                                    media_to_forward.push((
-                                        room_id,
-                                        participant.id,
-                                        media_data,
-                                    ));
+                                    media_to_forward.push((room_id, participant.id, media_data));
                                 }
                                 Event::ChannelOpen(ch_id, _label) => {
                                     participant.data_channel = Some(ch_id);
-                                    debug!(
-                                        "Participant {} data channel opened",
-                                        participant.id
-                                    );
+                                    debug!("Participant {} data channel opened", participant.id);
                                 }
                                 Event::EgressBitrateEstimate(_bwe) => {
                                     // Bandwidth estimation — can use for quality adaptation.
@@ -714,7 +791,7 @@ impl VoiceModule {
             let writer_mid = target
                 .forwarding_map
                 .iter()
-                .find(|(_, (src_pid, _))| *src_pid == sender_id)
+                .find(|&(_, &src_pid)| src_pid == sender_id)
                 .map(|(&mid, _)| mid);
 
             if let Some(mid) = writer_mid {
