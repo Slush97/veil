@@ -27,6 +27,12 @@ mod events {
     pub const TYPING_STOPPED: &str = "veil://typing-stopped";
     pub const LAN_PEER_DISCOVERED: &str = "veil://lan-peer-discovered";
     pub const LAN_PEER_LOST: &str = "veil://lan-peer-lost";
+    // Voice events
+    pub const VOICE_OFFER: &str = "veil://voice-offer";
+    pub const VOICE_ICE_CANDIDATE: &str = "veil://voice-ice-candidate";
+    pub const VOICE_PARTICIPANT_JOINED: &str = "veil://voice-participant-joined";
+    pub const VOICE_PARTICIPANT_LEFT: &str = "veil://voice-participant-left";
+    pub const VOICE_SPEAKING: &str = "veil://voice-speaking";
 }
 
 /// Spawn the network worker. Called once after identity is loaded.
@@ -275,6 +281,80 @@ pub async fn spawn_network_worker(
                             }
                         }
                     }
+                    Some(RelayEvent::VoiceOffer { room_id, participant_id, sdp, voice_endpoint, participants }) => {
+                        // Store the participant_id assigned by the SFU
+                        {
+                            let mut s = shared_state.write().await;
+                            s.voice.participant_id = Some(participant_id);
+                        }
+                        let _ = app_handle.emit(events::VOICE_OFFER, serde_json::json!({
+                            "roomId": hex::encode(room_id),
+                            "participantId": participant_id,
+                            "sdp": sdp,
+                            "voiceEndpoint": voice_endpoint,
+                            "participants": participants.iter().map(hex::encode).collect::<Vec<_>>(),
+                        }));
+                    }
+                    Some(RelayEvent::VoiceIceCandidate { room_id, participant_id, candidate }) => {
+                        let _ = app_handle.emit(events::VOICE_ICE_CANDIDATE, serde_json::json!({
+                            "roomId": hex::encode(room_id),
+                            "participantId": participant_id,
+                            "candidate": candidate,
+                        }));
+                    }
+                    Some(RelayEvent::VoiceParticipantJoined { room_id, peer_id_bytes }) => {
+                        let peer_hex = hex::encode(peer_id_bytes);
+                        // Update participant list in state
+                        {
+                            let mut s = shared_state.write().await;
+                            let display_name = s.display_names.get(&peer_hex).cloned().unwrap_or_else(|| peer_hex.clone());
+                            if let Some(ref mut room) = s.voice.current_room {
+                                room.participants.push(crate::state::VoiceParticipantInfo {
+                                    peer_id: peer_hex.clone(),
+                                    display_name,
+                                    is_muted: false,
+                                    is_speaking: false,
+                                });
+                            }
+                        }
+                        let _ = app_handle.emit(events::VOICE_PARTICIPANT_JOINED, serde_json::json!({
+                            "roomId": hex::encode(room_id),
+                            "peerId": peer_hex,
+                        }));
+                    }
+                    Some(RelayEvent::VoiceParticipantLeft { room_id, peer_id_bytes }) => {
+                        let peer_hex = hex::encode(peer_id_bytes);
+                        // Remove from participant list
+                        {
+                            let mut s = shared_state.write().await;
+                            if let Some(ref mut room) = s.voice.current_room {
+                                room.participants.retain(|p| p.peer_id != peer_hex);
+                            }
+                        }
+                        let _ = app_handle.emit(events::VOICE_PARTICIPANT_LEFT, serde_json::json!({
+                            "roomId": hex::encode(room_id),
+                            "peerId": peer_hex,
+                        }));
+                    }
+                    Some(RelayEvent::VoiceSpeaking { room_id, peer_id_bytes, audio_level }) => {
+                        let peer_hex = hex::encode(peer_id_bytes);
+                        let speaking = audio_level > 10;
+                        // Update speaking state
+                        {
+                            let mut s = shared_state.write().await;
+                            if let Some(ref mut room) = s.voice.current_room {
+                                if let Some(p) = room.participants.iter_mut().find(|p| p.peer_id == peer_hex) {
+                                    p.is_speaking = speaking;
+                                }
+                            }
+                        }
+                        let _ = app_handle.emit(events::VOICE_SPEAKING, serde_json::json!({
+                            "roomId": hex::encode(room_id),
+                            "peerId": peer_hex,
+                            "audioLevel": audio_level,
+                            "speaking": speaking,
+                        }));
+                    }
                     Some(RelayEvent::Error { code, message }) => {
                         tracing::warn!("relay error: {code}: {message}");
                     }
@@ -347,6 +427,41 @@ pub async fn spawn_network_worker(
                     Some(NetCommand::SendPresence(wire)) => {
                         manager.broadcast(&wire).await;
                     }
+                    Some(NetCommand::SubscribeTag(tag)) => {
+                        if let Some(ref rc) = relay_client {
+                            let _ = rc.subscribe(vec![tag]).await;
+                        }
+                    }
+                    Some(NetCommand::VoiceJoin { room_id, group_id }) => {
+                        if let Some(ref rc) = relay_client {
+                            if let Err(e) = rc.voice_join(room_id, group_id).await {
+                                tracing::warn!("voice join failed: {e}");
+                            }
+                        } else {
+                            tracing::warn!("voice join requested but no relay client");
+                        }
+                    }
+                    Some(NetCommand::VoiceAnswer { room_id, participant_id, sdp }) => {
+                        if let Some(ref rc) = relay_client {
+                            if let Err(e) = rc.voice_answer(room_id, participant_id, sdp).await {
+                                tracing::warn!("voice answer failed: {e}");
+                            }
+                        }
+                    }
+                    Some(NetCommand::VoiceIceCandidate { room_id, participant_id, candidate }) => {
+                        if let Some(ref rc) = relay_client {
+                            if let Err(e) = rc.voice_ice_candidate(room_id, participant_id, candidate).await {
+                                tracing::warn!("voice ice candidate failed: {e}");
+                            }
+                        }
+                    }
+                    Some(NetCommand::VoiceLeave { room_id }) => {
+                        if let Some(ref rc) = relay_client {
+                            if let Err(e) = rc.voice_leave(room_id).await {
+                                tracing::warn!("voice leave failed: {e}");
+                            }
+                        }
+                    }
                     None => break,
                 }
             }
@@ -394,45 +509,71 @@ async fn emit_message_received(
                 .map(|m| m.peer_id().fingerprint())
                 .unwrap_or_default();
 
-            match &msg_content.kind {
-                veil_core::MessageKind::Text(txt) => {
-                    let _ = app_handle.emit(
-                        events::MESSAGE_RECEIVED,
-                        serde_json::json!({
-                            "id": hex::encode(sealed.id.0),
-                            "senderId": sender_fp,
-                            "senderName": sender_name,
-                            "content": txt,
-                            "timestamp": msg_content.timestamp.timestamp(),
-                            "isSelf": sender_fp == self_fp,
-                            "groupId": hex::encode(group.id.0),
-                            "channelId": msg_content.channel_id.0.to_string(),
-                        }),
-                    );
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD;
+
+            let mut payload = serde_json::json!({
+                "id": hex::encode(sealed.id.0),
+                "senderId": sender_fp,
+                "senderName": sender_name,
+                "timestamp": msg_content.timestamp.timestamp(),
+                "isSelf": sender_fp == self_fp,
+                "groupId": hex::encode(group.id.0),
+                "channelId": msg_content.channel_id.0.to_string(),
+            });
+
+            let obj = payload.as_object_mut().unwrap();
+
+            // Unwrap Reply wrapper
+            let kind_ref = match &msg_content.kind {
+                veil_core::MessageKind::Reply { parent_id, content } => {
+                    obj.insert("replyToId".into(), hex::encode(parent_id.0).into());
+                    content.as_ref()
                 }
-                veil_core::MessageKind::Reply {
-                    parent_id,
-                    content: reply_kind,
-                } => {
-                    if let veil_core::MessageKind::Text(txt) = reply_kind.as_ref() {
-                        let _ = app_handle.emit(
-                            events::MESSAGE_RECEIVED,
-                            serde_json::json!({
-                                "id": hex::encode(sealed.id.0),
-                                "senderId": sender_fp,
-                                "senderName": sender_name,
-                                "content": txt,
-                                "timestamp": msg_content.timestamp.timestamp(),
-                                "isSelf": sender_fp == self_fp,
-                                "groupId": hex::encode(group.id.0),
-                                "channelId": msg_content.channel_id.0.to_string(),
-                                "replyToId": hex::encode(parent_id.0),
-                            }),
-                        );
+                other => other,
+            };
+
+            match kind_ref {
+                veil_core::MessageKind::Text(txt) => {
+                    obj.insert("content".into(), txt.clone().into());
+                    obj.insert("kindType".into(), "text".into());
+                }
+                veil_core::MessageKind::Image { blob_id, width, height, thumbnail, .. } => {
+                    obj.insert("kindType".into(), "image".into());
+                    obj.insert("blobId".into(), hex::encode(blob_id.0).into());
+                    obj.insert("width".into(), (*width).into());
+                    obj.insert("height".into(), (*height).into());
+                    if !thumbnail.is_empty() {
+                        obj.insert("thumbnailB64".into(), b64.encode(thumbnail).into());
                     }
                 }
-                _ => {}
+                veil_core::MessageKind::Video { blob_id, duration_secs, thumbnail, .. } => {
+                    obj.insert("kindType".into(), "video".into());
+                    obj.insert("blobId".into(), hex::encode(blob_id.0).into());
+                    obj.insert("durationSecs".into(), (*duration_secs).into());
+                    if !thumbnail.is_empty() {
+                        obj.insert("thumbnailB64".into(), b64.encode(thumbnail).into());
+                    }
+                }
+                veil_core::MessageKind::Audio { blob_id, duration_secs, waveform, .. } => {
+                    obj.insert("kindType".into(), "audio".into());
+                    obj.insert("blobId".into(), hex::encode(blob_id.0).into());
+                    obj.insert("durationSecs".into(), (*duration_secs).into());
+                    obj.insert("waveform".into(), serde_json::json!(waveform));
+                }
+                veil_core::MessageKind::File { blob_id, filename, size_bytes, .. } => {
+                    obj.insert("kindType".into(), "file".into());
+                    obj.insert("blobId".into(), hex::encode(blob_id.0).into());
+                    obj.insert("filename".into(), filename.clone().into());
+                    obj.insert("sizeBytes".into(), (*size_bytes).into());
+                }
+                _ => {
+                    // Control messages, etc — skip emitting
+                    break;
+                }
             }
+
+            let _ = app_handle.emit(events::MESSAGE_RECEIVED, payload);
             break; // Found the group — stop trying
         }
     }

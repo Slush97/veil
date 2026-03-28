@@ -136,3 +136,74 @@
   background: var(--green);
   color: #fff;
 }
+
+/* Context menu */
+.contextMenu {
+  position: fixed;
+  z-index: 300;
+  background: var(--bg-raised);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  min-width: 140px;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  border: none;
+  background: none;
+  color: var(--fg-label);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.menuItem:hover {
+  background: var(--accent-dim);
+}
+
+.menuItemDanger {
+  color: var(--color-red, #f04747);
+}
+
+.menuItemDanger:hover {
+  background: rgba(240, 71, 71, 0.1);
+}
+
+/* Rename overlay */
+.renameOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.renamePopover {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.renameInput {
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  width: 240px;
+}
+
+.renameInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}

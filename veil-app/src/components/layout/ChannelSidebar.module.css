@@ -24,7 +24,7 @@
 }
 
 .serverName {
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
   color: var(--fg);
   overflow: hidden;
@@ -43,13 +43,44 @@
 .category {
   display: flex;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
   padding: var(--space-lg) var(--space-sm) var(--space-xs) var(--space-lg);
-  cursor: pointer;
   user-select: none;
 }
 
+.categoryToggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+}
+
 .category:hover .categoryName {
+  color: var(--fg-label);
+}
+
+.addChannelBtn {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+
+.category:hover .addChannelBtn {
+  opacity: 1;
+}
+
+.addChannelBtn:hover {
   color: var(--fg-label);
 }
 
@@ -80,7 +111,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: 6px var(--space-sm) 6px var(--space-lg);
+  padding: 7px var(--space-sm) 7px var(--space-lg);
   margin: 1px var(--space-sm);
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -110,7 +141,7 @@
 }
 
 .channelName {
-  font-size: var(--text-base);
+  font-size: var(--text-lg);
   font-weight: var(--weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -123,10 +154,30 @@
   font-weight: var(--weight-semibold);
 }
 
+/* Voice participants under a voice channel */
+.voiceParticipants {
+  padding: 2px 0 4px calc(var(--space-lg) + 20px);
+}
+
+.voiceUser {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 2px var(--space-sm);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  border-radius: var(--radius-sm);
+  transition: color 0.15s ease;
+}
+
+.voiceUser.speaking {
+  color: var(--color-green, #43b581);
+}
+
 /* User panel (bottom) */
 .userPanel {
   height: 52px;
-  padding: 0 var(--space-sm);
+  padding: 0 var(--space-md);
   background: var(--bg-base);
   display: flex;
   align-items: center;
@@ -140,8 +191,8 @@
 }
 
 .userName {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -181,4 +232,34 @@
 .panelButton:hover {
   background: var(--bg-raised);
   color: var(--fg-label);
+}
+
+/* Channel context menu */
+.channelContextMenu {
+  position: fixed;
+  z-index: 300;
+  background: var(--bg-raised);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  min-width: 160px;
+}
+
+.menuItemDanger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  border: none;
+  background: none;
+  color: var(--color-red, #f04747);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.menuItemDanger:hover {
+  background: rgba(240, 71, 71, 0.1);
 }

@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
+use base64::Engine;
 use chrono::Utc;
 use serde::Serialize;
 use tauri::State;
 use tokio::sync::RwLock;
 
-use veil_core::{MessageContent, MessageKind, routing_tag_for_group};
-use veil_crypto::{DeviceIdentity, MasterIdentity};
+use veil_core::{GroupId, MessageContent, MessageKind, routing_tag_for_group};
+use veil_crypto::{DeviceIdentity, GroupKey, GroupKeyRing, MasterIdentity};
 
-use crate::state::{AppState, veil_data_dir};
+use crate::state::{AppState, VoiceRoomInfo, veil_data_dir};
 
 // ── Serializable types for the frontend ──
 
@@ -49,6 +50,25 @@ pub struct MessageInfo {
     pub channel_id: Option<String>,
     pub reply_to_sender: Option<String>,
     pub reply_to_preview: Option<String>,
+    // Media fields (populated for image/video/file/audio messages)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blob_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waveform: Option<Vec<u8>>,
 }
 
 #[derive(Serialize)]
@@ -238,10 +258,240 @@ pub async fn set_active_group(
     s.current_group_idx = Some(index);
     let group_id = s.groups[index].id.0;
     s.unread_counts.remove(&group_id);
+
+    // Switch to this group's channels
+    let group_hex = hex::encode(group_id);
+    s.channels = s
+        .group_channels
+        .get(&group_hex)
+        .cloned()
+        .unwrap_or_else(|| vec!["general".into(), "random".into()]);
+    s.current_channel = Some("general".into());
+
+    Ok(())
+}
+
+/// Create a new group (server).
+#[tauri::command]
+pub async fn create_group(
+    name: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<GroupInfo, String> {
+    if name.is_empty() || name.len() > 100 {
+        return Err("Group name must be 1-100 characters".into());
+    }
+
+    let state = state.inner().clone();
+    let mut s = state.write().await;
+    let master = s.master.as_ref().ok_or("Not logged in")?;
+    let master_id = master.peer_id().verifying_key.clone();
+    let peer_id = master.peer_id();
+
+    let group_key = GroupKey::generate();
+    let group_id_bytes = blake3::derive_key(
+        "veil-group-id",
+        &bincode::serialize(&(&name, &peer_id, chrono::Utc::now().timestamp_nanos_opt()))
+            .unwrap_or_default(),
+    );
+    let keyring = GroupKeyRing::new(group_key, master_id);
+
+    if let Some(ref store) = s.store {
+        store
+            .store_group_v2(&group_id_bytes, &name, &keyring)
+            .map_err(|e| format!("Failed to save group: {e}"))?;
+    }
+
+    let group_state = crate::state::GroupState {
+        name: name.clone(),
+        id: GroupId(group_id_bytes),
+        key_ring: std::sync::Arc::new(std::sync::Mutex::new(keyring)),
+        device_certs: Vec::new(),
+        members: Vec::new(),
+    };
+
+    s.groups.push(group_state);
+    let idx = s.groups.len() - 1;
+    s.current_group_idx = Some(idx);
+
+    // Set up default channels for this group
+    let group_hex = hex::encode(group_id_bytes);
+    let default_channels = vec!["general".into(), "random".into()];
+    s.group_channels
+        .insert(group_hex.clone(), default_channels.clone());
+    s.channels = default_channels;
+    s.current_channel = Some("general".into());
+
+    if let Some(ref store) = s.store {
+        let json = serde_json::to_string(&s.channels).unwrap_or_default();
+        let _ = store.store_setting(&format!("channels:{group_hex}"), &json);
+    }
+
+    // Subscribe to routing tag on relay
+    if let Some(ref tx) = s.net_cmd_tx {
+        let tag = routing_tag_for_group(&group_id_bytes);
+        let _ = tx
+            .try_send(crate::state::NetCommand::SubscribeTag(tag));
+    }
+
+    Ok(GroupInfo {
+        id: hex::encode(group_id_bytes),
+        name,
+        member_count: 0,
+        unread_count: 0,
+    })
+}
+
+/// Delete a group (server). Only removes it locally.
+#[tauri::command]
+pub async fn delete_group(
+    group_id: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    let mut s = state.write().await;
+
+    let id_bytes: [u8; 32] = hex::decode(&group_id)
+        .map_err(|_| "Invalid group ID")?
+        .try_into()
+        .map_err(|_| "Invalid group ID length")?;
+
+    let idx = s
+        .groups
+        .iter()
+        .position(|g| g.id.0 == id_bytes)
+        .ok_or("Group not found")?;
+
+    s.groups.remove(idx);
+    s.group_channels.remove(&group_id);
+
+    // Adjust current group index
+    if s.groups.is_empty() {
+        s.current_group_idx = None;
+        s.channels.clear();
+        s.current_channel = None;
+    } else {
+        let new_idx = idx.min(s.groups.len() - 1);
+        s.current_group_idx = Some(new_idx);
+        let group_hex = hex::encode(s.groups[new_idx].id.0);
+        s.channels = s
+            .group_channels
+            .get(&group_hex)
+            .cloned()
+            .unwrap_or_else(|| vec!["general".into(), "random".into()]);
+        s.current_channel = Some("general".into());
+    }
+
+    if let Some(ref store) = s.store {
+        let _ = store.delete_group_v2(&id_bytes);
+        let _ = store.store_setting(&format!("channels:{group_id}"), "");
+    }
+
+    Ok(())
+}
+
+/// Rename a group.
+#[tauri::command]
+pub async fn rename_group(
+    group_id: String,
+    new_name: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    if new_name.is_empty() || new_name.len() > 100 {
+        return Err("Group name must be 1-100 characters".into());
+    }
+
+    let state = state.inner().clone();
+    let mut s = state.write().await;
+
+    let id_bytes: [u8; 32] = hex::decode(&group_id)
+        .map_err(|_| "Invalid group ID")?
+        .try_into()
+        .map_err(|_| "Invalid group ID length")?;
+
+    let group = s
+        .groups
+        .iter_mut()
+        .find(|g| g.id.0 == id_bytes)
+        .ok_or("Group not found")?;
+
+    group.name = new_name.clone();
+    let key_ring = group.key_ring.clone();
+
+    // Re-persist with updated name
+    if let Some(ref store) = s.store {
+        let ring = key_ring.lock().map_err(|_| "Key ring lock poisoned")?;
+        let _ = store.store_group_v2(&id_bytes, &new_name, &ring);
+    }
+
     Ok(())
 }
 
 // ── Channel commands ──
+
+/// Create a new channel in the current group.
+#[tauri::command]
+pub async fn create_channel(
+    name: String,
+    _kind: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let name = name.to_lowercase().replace(' ', "-");
+    if name.is_empty() || name.len() > 50 {
+        return Err("Channel name must be 1-50 characters".into());
+    }
+
+    let state = state.inner().clone();
+    let mut s = state.write().await;
+    let group = s.current_group().ok_or("No active group")?;
+    let group_hex = hex::encode(group.id.0);
+
+    if s.channels.contains(&name) {
+        return Err("Channel already exists".into());
+    }
+
+    s.channels.push(name.clone());
+    let channels_copy = s.channels.clone();
+    s.group_channels.insert(group_hex.clone(), channels_copy);
+
+    if let Some(ref store) = s.store {
+        let json = serde_json::to_string(&s.channels).unwrap_or_default();
+        let _ = store.store_setting(&format!("channels:{group_hex}"), &json);
+    }
+
+    Ok(())
+}
+
+/// Delete a channel from the current group.
+#[tauri::command]
+pub async fn delete_channel(
+    name: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    let mut s = state.write().await;
+    let group = s.current_group().ok_or("No active group")?;
+    let group_hex = hex::encode(group.id.0);
+
+    if name == "general" {
+        return Err("Cannot delete the general channel".into());
+    }
+
+    s.channels.retain(|c| c != &name);
+    let channels_copy = s.channels.clone();
+    s.group_channels.insert(group_hex.clone(), channels_copy);
+
+    // If we deleted the active channel, switch to general
+    if s.current_channel.as_deref() == Some(&name) {
+        s.current_channel = Some("general".into());
+    }
+
+    if let Some(ref store) = s.store {
+        let json = serde_json::to_string(&s.channels).unwrap_or_default();
+        let _ = store.store_setting(&format!("channels:{group_hex}"), &json);
+    }
+
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn get_channels(
@@ -321,50 +571,35 @@ pub async fn get_messages(
             let ch = msg_content.channel_id.0.to_string();
             let is_self = sender_fp == self_fp;
 
-            match &msg_content.kind {
-                MessageKind::Text(txt) => {
-                    messages.push(MessageInfo {
-                        id: hex::encode(sealed.id.0),
-                        sender_id: sender_fp,
-                        sender_name,
-                        content: txt.clone(),
-                        timestamp: ts,
-                        is_self,
-                        channel_id: Some(ch),
-                        reply_to_sender: None,
-                        reply_to_preview: None,
-                    });
+            // Handle reply wrapper
+            let (kind_ref, reply_to_sender, reply_to_preview) = match &msg_content.kind {
+                MessageKind::Reply { parent_id, content: reply_kind } => {
+                    let parent_hex = hex::encode(parent_id.0);
+                    let (rts, rtp) = messages
+                        .iter()
+                        .find(|m: &&MessageInfo| m.id == parent_hex)
+                        .map(|p| (Some(p.sender_name.clone()), Some(p.content.chars().take(60).collect::<String>())))
+                        .unwrap_or((None, None));
+                    (reply_kind.as_ref(), rts, rtp)
                 }
-                MessageKind::Reply {
-                    parent_id,
-                    content: reply_kind,
-                } => {
-                    if let MessageKind::Text(txt) = reply_kind.as_ref() {
-                        let parent_hex = hex::encode(parent_id.0);
-                        let (rts, rtp) = messages
-                            .iter()
-                            .find(|m: &&MessageInfo| m.id == parent_hex)
-                            .map(|p| {
-                                (
-                                    Some(p.sender_name.clone()),
-                                    Some(p.content.chars().take(60).collect::<String>()),
-                                )
-                            })
-                            .unwrap_or((None, None));
-                        messages.push(MessageInfo {
-                            id: hex::encode(sealed.id.0),
-                            sender_id: sender_fp,
-                            sender_name,
-                            content: txt.clone(),
-                            timestamp: ts,
-                            is_self,
-                            channel_id: Some(ch),
-                            reply_to_sender: rts,
-                            reply_to_preview: rtp,
-                        });
-                    }
-                }
-                _ => {}
+                other => (other, None, None),
+            };
+
+            let mut info = message_info_from_kind(
+                sealed,
+                &sender_fp,
+                &sender_name,
+                ts,
+                is_self,
+                Some(ch),
+                kind_ref,
+            );
+            info.reply_to_sender = reply_to_sender;
+            info.reply_to_preview = reply_to_preview;
+
+            // Skip control messages and other non-displayable types
+            if info.kind_type.is_some() {
+                messages.push(info);
             }
         }
     }
@@ -427,7 +662,402 @@ pub async fn send_message(
         channel_id: Some(channel_id_str),
         reply_to_sender: None,
         reply_to_preview: None,
+        kind_type: Some("text".into()),
+        blob_id: None,
+        width: None,
+        height: None,
+        thumbnail_b64: None,
+        filename: None,
+        size_bytes: None,
+        duration_secs: None,
+        waveform: None,
     })
+}
+
+// ── File / media commands ──
+
+/// Send a file from disk. Detects media type, generates thumbnails, encrypts, stores, and sends.
+#[tauri::command]
+pub async fn send_file(
+    file_path: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<MessageInfo, String> {
+    use veil_core::media;
+
+    let data = std::fs::read(&file_path).map_err(|e| format!("Failed to read file: {e}"))?;
+    let filename = std::path::Path::new(&file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+
+    let media_type = media::detect(&data, Some(&filename));
+    let file_size = data.len() as u64;
+
+    let state = state.inner().clone();
+    let s = state.read().await;
+    let master = s.master.as_ref().ok_or("Not logged in")?;
+    let group = s.current_group().ok_or("No active group")?;
+    let channel_id = s.current_channel_id(group);
+    let channel_id_str = channel_id.0.to_string();
+
+    // Encrypt the blob with the group key
+    let ring = group.key_ring.lock().map_err(|_| "Key ring lock poisoned")?;
+    let group_key = ring.current();
+    let blob_id = veil_core::BlobId(*blake3::hash(&data).as_bytes());
+    let encrypted = group_key.encrypt(&data).map_err(|e| format!("Encrypt failed: {e}"))?;
+    drop(ring);
+
+    // Store the full blob locally
+    if let Some(ref store) = s.store {
+        let _ = store.store_blob_full(&blob_id, &encrypted);
+    }
+
+    // Build the appropriate MessageKind
+    let kind = match media_type {
+        media::MediaType::Image => {
+            let meta = media::extract_image_meta(&data);
+            let (width, height, thumbnail) = meta
+                .map(|m| (m.width, m.height, m.thumbnail))
+                .unwrap_or((0, 0, Vec::new()));
+            MessageKind::Image {
+                blob_id: blob_id.clone(),
+                width,
+                height,
+                thumbnail,
+                ciphertext_len: encrypted.len() as u64,
+            }
+        }
+        media::MediaType::Video => {
+            // For video, try to use image thumbnail extraction on the raw bytes
+            // (won't work for most videos, but we send it anyway)
+            MessageKind::Video {
+                blob_id: blob_id.clone(),
+                duration_secs: 0.0,
+                thumbnail: Vec::new(),
+                ciphertext_len: encrypted.len() as u64,
+            }
+        }
+        media::MediaType::Audio => {
+            let meta = media::extract_audio_meta(&data);
+            let (duration, waveform) = meta
+                .map(|m| (m.duration_secs, m.waveform))
+                .unwrap_or((0.0, vec![0u8; 64]));
+            MessageKind::Audio {
+                blob_id: blob_id.clone(),
+                duration_secs: duration,
+                waveform,
+                ciphertext_len: encrypted.len() as u64,
+            }
+        }
+        media::MediaType::File => {
+            let inline = if data.len() < veil_store::blob::INLINE_THRESHOLD {
+                Some(encrypted.clone())
+            } else {
+                None
+            };
+            MessageKind::File {
+                blob_id: blob_id.clone(),
+                filename: filename.clone(),
+                size_bytes: file_size,
+                ciphertext_len: encrypted.len() as u64,
+                inline_data: inline,
+            }
+        }
+    };
+
+    let now = Utc::now();
+    let content = MessageContent {
+        kind: kind.clone(),
+        timestamp: now,
+        channel_id,
+        expires_at: None,
+    };
+
+    let sealed = s.seal_send_persist(&content).ok_or("Failed to seal message")?;
+
+    let fp = master.peer_id().fingerprint();
+    let display_name = s
+        .display_names
+        .get(&fp)
+        .cloned()
+        .unwrap_or_else(|| s.username.clone().unwrap_or_else(|| fp.clone()));
+
+    Ok(message_info_from_kind(
+        &sealed,
+        &fp,
+        &display_name,
+        now.timestamp(),
+        true,
+        Some(channel_id_str),
+        &kind,
+    ))
+}
+
+/// Send raw bytes (from clipboard paste) as a media message.
+#[tauri::command]
+pub async fn send_file_bytes(
+    data: Vec<u8>,
+    filename: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<MessageInfo, String> {
+    use veil_core::media;
+
+    let media_type = media::detect(&data, Some(&filename));
+    let file_size = data.len() as u64;
+
+    let state = state.inner().clone();
+    let s = state.read().await;
+    let master = s.master.as_ref().ok_or("Not logged in")?;
+    let group = s.current_group().ok_or("No active group")?;
+    let channel_id = s.current_channel_id(group);
+    let channel_id_str = channel_id.0.to_string();
+
+    let ring = group.key_ring.lock().map_err(|_| "Key ring lock poisoned")?;
+    let group_key = ring.current();
+    let blob_id = veil_core::BlobId(*blake3::hash(&data).as_bytes());
+    let encrypted = group_key.encrypt(&data).map_err(|e| format!("Encrypt failed: {e}"))?;
+    drop(ring);
+
+    if let Some(ref store) = s.store {
+        let _ = store.store_blob_full(&blob_id, &encrypted);
+    }
+
+    let kind = match media_type {
+        media::MediaType::Image => {
+            let meta = media::extract_image_meta(&data);
+            let (width, height, thumbnail) = meta
+                .map(|m| (m.width, m.height, m.thumbnail))
+                .unwrap_or((0, 0, Vec::new()));
+            MessageKind::Image {
+                blob_id: blob_id.clone(),
+                width,
+                height,
+                thumbnail,
+                ciphertext_len: encrypted.len() as u64,
+            }
+        }
+        media::MediaType::Audio => {
+            let meta = media::extract_audio_meta(&data);
+            let (duration, waveform) = meta
+                .map(|m| (m.duration_secs, m.waveform))
+                .unwrap_or((0.0, vec![0u8; 64]));
+            MessageKind::Audio {
+                blob_id: blob_id.clone(),
+                duration_secs: duration,
+                waveform,
+                ciphertext_len: encrypted.len() as u64,
+            }
+        }
+        _ => {
+            let inline = if data.len() < veil_store::blob::INLINE_THRESHOLD {
+                Some(encrypted.clone())
+            } else {
+                None
+            };
+            MessageKind::File {
+                blob_id: blob_id.clone(),
+                filename: filename.clone(),
+                size_bytes: file_size,
+                ciphertext_len: encrypted.len() as u64,
+                inline_data: inline,
+            }
+        }
+    };
+
+    let now = Utc::now();
+    let content = MessageContent {
+        kind: kind.clone(),
+        timestamp: now,
+        channel_id,
+        expires_at: None,
+    };
+
+    let sealed = s.seal_send_persist(&content).ok_or("Failed to seal message")?;
+
+    let fp = master.peer_id().fingerprint();
+    let display_name = s
+        .display_names
+        .get(&fp)
+        .cloned()
+        .unwrap_or_else(|| s.username.clone().unwrap_or_else(|| fp.clone()));
+
+    Ok(message_info_from_kind(
+        &sealed,
+        &fp,
+        &display_name,
+        now.timestamp(),
+        true,
+        Some(channel_id_str),
+        &kind,
+    ))
+}
+
+/// Retrieve a blob by ID, decrypt it, and return as base64.
+#[tauri::command]
+pub async fn get_blob(
+    blob_id: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<String, String> {
+    let state = state.inner().clone();
+    let s = state.read().await;
+    let store = s.store.as_ref().ok_or("Store not initialized")?;
+    let group = s.current_group().ok_or("No active group")?;
+
+    let id_bytes: [u8; 32] = hex::decode(&blob_id)
+        .map_err(|_| "Invalid blob ID")?
+        .try_into()
+        .map_err(|_| "Invalid blob ID length")?;
+    let bid = veil_core::BlobId(id_bytes);
+
+    let encrypted = store
+        .get_blob_full(&bid)
+        .map_err(|e| format!("Blob lookup failed: {e}"))?
+        .ok_or("Blob not found")?;
+
+    let ring = group.key_ring.lock().map_err(|_| "Key ring lock poisoned")?;
+    let decrypted = ring
+        .current()
+        .decrypt(&encrypted)
+        .map_err(|e| format!("Decrypt failed: {e}"))?;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(&decrypted))
+}
+
+/// Helper to build MessageInfo from any MessageKind.
+fn message_info_from_kind(
+    sealed: &veil_core::SealedMessage,
+    sender_fp: &str,
+    sender_name: &str,
+    timestamp: i64,
+    is_self: bool,
+    channel_id: Option<String>,
+    kind: &MessageKind,
+) -> MessageInfo {
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    match kind {
+        MessageKind::Text(txt) => MessageInfo {
+            id: hex::encode(sealed.id.0),
+            sender_id: sender_fp.to_string(),
+            sender_name: sender_name.to_string(),
+            content: txt.clone(),
+            timestamp,
+            is_self,
+            channel_id,
+            reply_to_sender: None,
+            reply_to_preview: None,
+            kind_type: Some("text".into()),
+            blob_id: None,
+            width: None,
+            height: None,
+            thumbnail_b64: None,
+            filename: None,
+            size_bytes: None,
+            duration_secs: None,
+            waveform: None,
+        },
+        MessageKind::Image { blob_id, width, height, thumbnail, .. } => MessageInfo {
+            id: hex::encode(sealed.id.0),
+            sender_id: sender_fp.to_string(),
+            sender_name: sender_name.to_string(),
+            content: String::new(),
+            timestamp,
+            is_self,
+            channel_id,
+            reply_to_sender: None,
+            reply_to_preview: None,
+            kind_type: Some("image".into()),
+            blob_id: Some(hex::encode(blob_id.0)),
+            width: Some(*width),
+            height: Some(*height),
+            thumbnail_b64: if thumbnail.is_empty() { None } else { Some(b64.encode(thumbnail)) },
+            filename: None,
+            size_bytes: None,
+            duration_secs: None,
+            waveform: None,
+        },
+        MessageKind::Video { blob_id, duration_secs, thumbnail, .. } => MessageInfo {
+            id: hex::encode(sealed.id.0),
+            sender_id: sender_fp.to_string(),
+            sender_name: sender_name.to_string(),
+            content: String::new(),
+            timestamp,
+            is_self,
+            channel_id,
+            reply_to_sender: None,
+            reply_to_preview: None,
+            kind_type: Some("video".into()),
+            blob_id: Some(hex::encode(blob_id.0)),
+            width: None,
+            height: None,
+            thumbnail_b64: if thumbnail.is_empty() { None } else { Some(b64.encode(thumbnail)) },
+            filename: None,
+            size_bytes: None,
+            duration_secs: Some(*duration_secs),
+            waveform: None,
+        },
+        MessageKind::Audio { blob_id, duration_secs, waveform, .. } => MessageInfo {
+            id: hex::encode(sealed.id.0),
+            sender_id: sender_fp.to_string(),
+            sender_name: sender_name.to_string(),
+            content: String::new(),
+            timestamp,
+            is_self,
+            channel_id,
+            reply_to_sender: None,
+            reply_to_preview: None,
+            kind_type: Some("audio".into()),
+            blob_id: Some(hex::encode(blob_id.0)),
+            width: None,
+            height: None,
+            thumbnail_b64: None,
+            filename: None,
+            size_bytes: None,
+            duration_secs: Some(*duration_secs),
+            waveform: Some(waveform.clone()),
+        },
+        MessageKind::File { blob_id, filename, size_bytes, .. } => MessageInfo {
+            id: hex::encode(sealed.id.0),
+            sender_id: sender_fp.to_string(),
+            sender_name: sender_name.to_string(),
+            content: String::new(),
+            timestamp,
+            is_self,
+            channel_id,
+            reply_to_sender: None,
+            reply_to_preview: None,
+            kind_type: Some("file".into()),
+            blob_id: Some(hex::encode(blob_id.0)),
+            width: None,
+            height: None,
+            thumbnail_b64: None,
+            filename: Some(filename.clone()),
+            size_bytes: Some(*size_bytes),
+            duration_secs: None,
+            waveform: None,
+        },
+        _ => MessageInfo {
+            id: hex::encode(sealed.id.0),
+            sender_id: sender_fp.to_string(),
+            sender_name: sender_name.to_string(),
+            content: String::new(),
+            timestamp,
+            is_self,
+            channel_id,
+            reply_to_sender: None,
+            reply_to_preview: None,
+            kind_type: None,
+            blob_id: None,
+            width: None,
+            height: None,
+            thumbnail_b64: None,
+            filename: None,
+            size_bytes: None,
+            duration_secs: None,
+            waveform: None,
+        },
+    }
 }
 
 // ── Connection commands ──
@@ -516,4 +1146,306 @@ pub async fn start_network(
     ));
 
     Ok(())
+}
+
+// ── Voice commands ──
+
+/// Serializable voice state for the frontend.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceStateInfo {
+    pub in_room: bool,
+    pub room_id: Option<String>,
+    pub channel_name: Option<String>,
+    pub is_muted: bool,
+    pub is_deafened: bool,
+    pub participants: Vec<crate::state::VoiceParticipantInfo>,
+}
+
+/// Join a voice channel. Derives a room_id from (group_id, channel_name).
+#[tauri::command]
+pub async fn voice_join(
+    channel_name: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let s = state.inner().clone();
+    let mut st = s.write().await;
+
+    if st.voice.current_room.is_some() {
+        return Err("Already in a voice channel".into());
+    }
+
+    let group = st.current_group().ok_or("No active group")?.clone();
+    let tx = st.net_cmd_tx.as_ref().ok_or("Network not ready")?.clone();
+
+    // Derive room_id from group_id + channel_name
+    let room_id = blake3::derive_key(
+        "veil-voice-room-id",
+        &[group.id.0.as_slice(), channel_name.as_bytes()].concat(),
+    );
+
+    st.voice.room_id_bytes = Some(room_id);
+    st.voice.current_room = Some(VoiceRoomInfo {
+        room_id: hex::encode(room_id),
+        channel_name: channel_name.clone(),
+        participants: Vec::new(),
+    });
+    st.voice.is_muted = false;
+    st.voice.is_deafened = false;
+
+    tx.send(crate::state::NetCommand::VoiceJoin {
+        room_id,
+        group_id: group.id.0,
+    })
+    .await
+    .map_err(|e| format!("Failed to send voice join: {e}"))?;
+
+    Ok(())
+}
+
+/// Leave the current voice channel.
+#[tauri::command]
+pub async fn voice_leave(
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let s = state.inner().clone();
+    let mut st = s.write().await;
+
+    let room_id = st.voice.room_id_bytes.ok_or("Not in a voice channel")?;
+    let tx = st.net_cmd_tx.as_ref().ok_or("Network not ready")?.clone();
+
+    tx.send(crate::state::NetCommand::VoiceLeave { room_id })
+        .await
+        .map_err(|e| format!("Failed to send voice leave: {e}"))?;
+
+    st.voice = crate::state::VoiceState::default();
+    Ok(())
+}
+
+/// Toggle local mute state.
+#[tauri::command]
+pub async fn voice_set_mute(
+    muted: bool,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let s = state.inner().clone();
+    let mut st = s.write().await;
+    st.voice.is_muted = muted;
+    Ok(())
+}
+
+/// Toggle deafen state (deafen implies mute).
+#[tauri::command]
+pub async fn voice_set_deafen(
+    deafened: bool,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let s = state.inner().clone();
+    let mut st = s.write().await;
+    st.voice.is_deafened = deafened;
+    if deafened {
+        st.voice.is_muted = true;
+    }
+    Ok(())
+}
+
+/// Forward an SDP answer to the relay's SFU.
+#[tauri::command]
+pub async fn voice_sdp_answer(
+    sdp: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let s = state.inner().clone();
+    let st = s.read().await;
+
+    let room_id = st.voice.room_id_bytes.ok_or("Not in a voice channel")?;
+    let participant_id = st.voice.participant_id.ok_or("No participant ID assigned")?;
+    let tx = st.net_cmd_tx.as_ref().ok_or("Network not ready")?.clone();
+
+    tx.send(crate::state::NetCommand::VoiceAnswer {
+        room_id,
+        participant_id,
+        sdp,
+    })
+    .await
+    .map_err(|e| format!("Failed to send SDP answer: {e}"))?;
+
+    Ok(())
+}
+
+/// Forward an ICE candidate to the relay's SFU.
+#[tauri::command]
+pub async fn voice_ice_candidate(
+    candidate: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let s = state.inner().clone();
+    let st = s.read().await;
+
+    let room_id = st.voice.room_id_bytes.ok_or("Not in a voice channel")?;
+    let participant_id = st.voice.participant_id.ok_or("No participant ID assigned")?;
+    let tx = st.net_cmd_tx.as_ref().ok_or("Network not ready")?.clone();
+
+    tx.send(crate::state::NetCommand::VoiceIceCandidate {
+        room_id,
+        participant_id,
+        candidate,
+    })
+    .await
+    .map_err(|e| format!("Failed to send ICE candidate: {e}"))?;
+
+    Ok(())
+}
+
+/// Export the voice encryption key derived from the current group key.
+/// Returns (hex_key, generation) for use in the browser's Web Crypto API.
+#[tauri::command]
+pub async fn get_voice_encryption_key(
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(String, u64), String> {
+    let s = state.inner().clone();
+    let st = s.read().await;
+
+    let group = st.current_group().ok_or("No active group")?;
+    let ring = group.key_ring.lock().map_err(|_| "Key ring lock poisoned")?;
+    let voice_key = ring.current().derive_channel_key(b"voice");
+    let (raw_key, generation) = voice_key.to_raw_parts();
+
+    Ok((hex::encode(raw_key), generation))
+}
+
+/// Get the current voice state.
+#[tauri::command]
+pub async fn get_voice_state(
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<VoiceStateInfo, String> {
+    let s = state.inner().clone();
+    let st = s.read().await;
+
+    Ok(VoiceStateInfo {
+        in_room: st.voice.current_room.is_some(),
+        room_id: st.voice.current_room.as_ref().map(|r| r.room_id.clone()),
+        channel_name: st.voice.current_room.as_ref().map(|r| r.channel_name.clone()),
+        is_muted: st.voice.is_muted,
+        is_deafened: st.voice.is_deafened,
+        participants: st
+            .voice
+            .current_room
+            .as_ref()
+            .map(|r| r.participants.clone())
+            .unwrap_or_default(),
+    })
+}
+
+// ── Hosted relay commands ──
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HostedRelayStatus {
+    pub hosting: bool,
+    pub addr: Option<String>,
+    pub voice_enabled: bool,
+}
+
+/// Start an embedded relay server on the given port.
+#[tauri::command]
+pub async fn start_hosted_relay(
+    port: u16,
+    voice_enabled: bool,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<HostedRelayStatus, String> {
+    let state_arc = state.inner().clone();
+    let mut s = state_arc.write().await;
+
+    if let Some(ref handle) = s.relay_task {
+        if !handle.is_finished() {
+            return Err("Already hosting a relay".into());
+        }
+    }
+
+    let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
+    let data_dir = veil_data_dir();
+    std::fs::create_dir_all(&data_dir).ok();
+    let db_path = data_dir.join("relay-mailbox.redb");
+
+    let voice_config = if voice_enabled {
+        Some(veil_relay::voice::VoiceConfig {
+            udp_bind_addr: ([0, 0, 0, 0], port + 1).into(),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
+    let config = veil_relay::RelayConfig {
+        bind_addr,
+        db_path,
+        voice_config,
+        ..Default::default()
+    };
+
+    let server = veil_relay::RelayServer::new(config);
+
+    let handle = tokio::spawn(async move {
+        server
+            .run()
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })
+    });
+
+    s.relay_task = Some(handle);
+    s.relay_host_addr = Some(bind_addr);
+
+    // Persist settings
+    if let Some(ref store) = s.store {
+        let _ = store.store_setting("relay_host_port", &port.to_string());
+        let _ = store.store_setting("relay_host_voice", if voice_enabled { "1" } else { "0" });
+    }
+
+    let display_addr = format!("127.0.0.1:{port}");
+
+    Ok(HostedRelayStatus {
+        hosting: true,
+        addr: Some(display_addr),
+        voice_enabled,
+    })
+}
+
+/// Stop the embedded relay server.
+#[tauri::command]
+pub async fn stop_hosted_relay(
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<(), String> {
+    let state_arc = state.inner().clone();
+    let mut s = state_arc.write().await;
+
+    if let Some(handle) = s.relay_task.take() {
+        handle.abort();
+    }
+    s.relay_host_addr = None;
+    Ok(())
+}
+
+/// Get the status of the embedded relay server.
+#[tauri::command]
+pub async fn get_hosted_relay_status(
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<HostedRelayStatus, String> {
+    let state_arc = state.inner().clone();
+    let s = state_arc.read().await;
+
+    let hosting = s
+        .relay_task
+        .as_ref()
+        .map_or(false, |h| !h.is_finished());
+
+    Ok(HostedRelayStatus {
+        hosting,
+        addr: if hosting {
+            s.relay_host_addr.map(|a| format!("127.0.0.1:{}", a.port()))
+        } else {
+            None
+        },
+        voice_enabled: hosting, // If hosting, voice was enabled
+    })
 }

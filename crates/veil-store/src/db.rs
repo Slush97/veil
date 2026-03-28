@@ -444,6 +444,28 @@ impl LocalStore {
         Ok(groups)
     }
 
+    /// Delete a v2 group from the metadata table.
+    pub fn delete_group_v2(&self, group_id: &[u8; 32]) -> Result<(), StoreError> {
+        let meta_key = format!("group_v2:{}", hex::encode(group_id));
+
+        let tx = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        {
+            let mut table = tx
+                .open_table(METADATA)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            table
+                .remove(meta_key.as_str())
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Store a full encrypted blob locally. The sender always keeps a complete copy
     /// so recipients can fall back to direct transfer if not enough shards are available.
     pub fn store_blob_full(

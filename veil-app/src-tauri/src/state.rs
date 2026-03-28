@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::Serialize;
 use tokio::sync::mpsc;
 
 use veil_core::{GroupId, SealedMessage};
@@ -20,12 +21,62 @@ pub struct GroupState {
     pub members: Vec<PeerId>,
 }
 
+/// A participant in a voice room.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceParticipantInfo {
+    pub peer_id: String,
+    pub display_name: String,
+    pub is_muted: bool,
+    pub is_speaking: bool,
+}
+
+/// Info about the voice room we're currently in.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceRoomInfo {
+    pub room_id: String,
+    pub channel_name: String,
+    pub participants: Vec<VoiceParticipantInfo>,
+}
+
+/// Local voice state (mute/deafen + current room).
+#[derive(Clone, Debug, Default)]
+pub struct VoiceState {
+    pub current_room: Option<VoiceRoomInfo>,
+    pub is_muted: bool,
+    pub is_deafened: bool,
+    /// Participant ID assigned by the SFU for our connection.
+    pub participant_id: Option<u64>,
+    /// Raw room_id bytes for relay commands.
+    pub room_id_bytes: Option<[u8; 32]>,
+}
+
 /// Commands sent from Tauri commands → network worker.
 pub enum NetCommand {
     Connect(SocketAddr),
     SendMessage(SealedMessage),
     ConnectRelay(SocketAddr),
     SendPresence(veil_net::WireMessage),
+    SubscribeTag([u8; 32]),
+    // Voice commands
+    VoiceJoin {
+        room_id: [u8; 32],
+        group_id: [u8; 32],
+    },
+    VoiceAnswer {
+        room_id: [u8; 32],
+        participant_id: u64,
+        sdp: String,
+    },
+    VoiceIceCandidate {
+        room_id: [u8; 32],
+        participant_id: u64,
+        candidate: String,
+    },
+    VoiceLeave {
+        room_id: [u8; 32],
+    },
 }
 
 /// Application state managed by Tauri.
@@ -40,6 +91,8 @@ pub struct AppState {
     // Groups & channels
     pub groups: Vec<GroupState>,
     pub current_group_idx: Option<usize>,
+    /// Per-group channel lists: group_id hex → channel names
+    pub group_channels: HashMap<String, Vec<String>>,
     pub channels: Vec<String>,
     pub current_channel: Option<String>,
 
@@ -57,6 +110,13 @@ pub struct AppState {
     pub username: Option<String>,
     pub unread_counts: HashMap<[u8; 32], usize>,
 
+    // Voice
+    pub voice: VoiceState,
+
+    // Embedded relay hosting
+    pub relay_task: Option<tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>>,
+    pub relay_host_addr: Option<SocketAddr>,
+
     // Network worker flag
     pub network_spawned: bool,
 }
@@ -68,6 +128,7 @@ impl Default for AppState {
             device: None,
             groups: Vec::new(),
             current_group_idx: None,
+            group_channels: HashMap::new(),
             channels: Vec::new(),
             current_channel: None,
             store: None,
@@ -78,6 +139,9 @@ impl Default for AppState {
             display_names: HashMap::new(),
             username: None,
             unread_counts: HashMap::new(),
+            voice: VoiceState::default(),
+            relay_task: None,
+            relay_host_addr: None,
             network_spawned: false,
         }
     }
@@ -254,7 +318,31 @@ impl AppState {
             self.current_group_idx = Some(0);
         }
 
-        self.channels = vec!["general".into(), "random".into()];
+        // Load per-group channels from settings, or create defaults
+        if let Some(ref store) = self.store {
+            for group in &self.groups {
+                let group_hex = hex::encode(group.id.0);
+                let key = format!("channels:{group_hex}");
+                let chans = match store.get_setting(&key) {
+                    Ok(Some(json)) => serde_json::from_str::<Vec<String>>(&json)
+                        .unwrap_or_else(|_| vec!["general".into(), "random".into()]),
+                    _ => vec!["general".into(), "random".into()],
+                };
+                self.group_channels.insert(group_hex, chans);
+            }
+        }
+
+        // Set channels for the current group
+        if let Some(group) = self.current_group() {
+            let group_hex = hex::encode(group.id.0);
+            self.channels = self
+                .group_channels
+                .get(&group_hex)
+                .cloned()
+                .unwrap_or_else(|| vec!["general".into(), "random".into()]);
+        } else {
+            self.channels = vec!["general".into(), "random".into()];
+        }
         self.current_channel = Some("general".into());
 
         // Load settings from store

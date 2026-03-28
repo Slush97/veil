@@ -28,8 +28,8 @@
 }
 
 .channelName {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
+  font-size: 16px;
+  font-weight: var(--weight-bold);
   color: var(--fg);
 }
 
@@ -171,7 +171,7 @@
 }
 
 .senderName {
-  font-size: var(--text-base);
+  font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
   color: var(--fg);
   cursor: pointer;
@@ -192,7 +192,8 @@
 
 .messageText {
   color: var(--fg);
-  line-height: var(--leading-normal);
+  font-size: var(--text-lg);
+  line-height: 1.375;
   word-wrap: break-word;
   overflow-wrap: break-word;
   user-select: text;
@@ -367,6 +368,67 @@
   40% { transform: scale(1); opacity: 1; }
 }
 
+/* Attachment preview */
+.attachmentPreview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: 0 var(--space-lg);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-input);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.attachmentThumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.attachmentFileIcon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-raised);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.attachmentName {
+  font-size: var(--text-sm);
+  color: var(--fg-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.attachmentRemove {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  color: var(--fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.attachmentRemove:hover {
+  background: var(--bg-raised);
+  color: var(--fg);
+}
+
 /* Message input / composer */
 .composer {
   padding: 0 var(--space-lg) var(--space-lg);
@@ -377,7 +439,7 @@
   align-items: flex-end;
   background: var(--bg-input);
   border-radius: var(--radius-lg);
-  padding: var(--space-xs);
+  padding: 2px var(--space-xs);
 }
 
 .composerButton {
@@ -401,13 +463,13 @@
 
 .composerInput {
   flex: 1;
-  padding: var(--space-sm) var(--space-sm);
+  padding: 10px var(--space-sm);
   background: transparent;
   color: var(--fg);
-  font-size: var(--text-base);
+  font-size: var(--text-lg);
   line-height: var(--leading-normal);
   resize: none;
-  min-height: 20px;
+  min-height: 22px;
   max-height: 200px;
   overflow-y: auto;
 }
@@ -491,4 +553,181 @@
 
 .emptyAction:hover {
   background: var(--accent-hover);
+}
+
+/* ── Media messages ── */
+
+.mediaImage {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--bg-base);
+  margin-top: var(--space-xs);
+  position: relative;
+}
+
+.mediaImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.mediaPlaceholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  color: var(--fg-dim);
+  background: var(--bg-base);
+  width: 100%;
+  height: 100%;
+  min-height: 120px;
+  border-radius: var(--radius-lg);
+}
+
+/* Video */
+.mediaVideo {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  cursor: pointer;
+  margin-top: var(--space-xs);
+  max-width: 400px;
+}
+
+.mediaVideoEl {
+  width: 100%;
+  max-height: 360px;
+  border-radius: var(--radius-lg);
+  background: #000;
+}
+
+.mediaVideoThumb {
+  position: relative;
+}
+
+.playOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  color: white;
+  border-radius: var(--radius-lg);
+}
+
+/* Audio */
+.mediaAudio {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-base);
+  border-radius: var(--radius-lg);
+  margin-top: var(--space-xs);
+  max-width: 360px;
+}
+
+.audioPlayBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  border: none;
+  font-size: var(--text-sm);
+}
+
+.audioWaveform {
+  display: flex;
+  align-items: center;
+  gap: 1.5px;
+  flex: 1;
+  height: 32px;
+}
+
+.waveformBar {
+  width: 3px;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0.6;
+  transition: height 0.1s ease;
+}
+
+.audioDuration {
+  font-size: var(--text-xs);
+  color: var(--fg-dim);
+  flex-shrink: 0;
+  min-width: 32px;
+  text-align: right;
+}
+
+/* File */
+.mediaFile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  margin-top: var(--space-xs);
+  max-width: 400px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.mediaFile:hover {
+  background: var(--bg-message-hover);
+}
+
+.fileIcon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.fileInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fileName {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--accent-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileSize {
+  font-size: var(--text-xs);
+  color: var(--fg-dim);
+}
+
+.fileDownload {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.fileDownload:hover {
+  color: var(--fg);
 }

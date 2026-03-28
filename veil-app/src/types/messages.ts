@@ -1,6 +1,7 @@
 export type MessageKind =
   | { type: 'text'; content: string }
   | { type: 'image'; blobId: string; width: number; height: number; thumbnailUrl?: string }
+  | { type: 'video'; blobId: string; durationSecs: number; thumbnailUrl?: string }
   | { type: 'file'; blobId: string; filename: string; sizeBytes: number }
   | { type: 'audio'; blobId: string; durationSecs: number; waveform: number[] }
   | { type: 'system'; content: string };
