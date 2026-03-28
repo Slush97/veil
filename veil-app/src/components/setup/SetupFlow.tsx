@@ -1,17 +1,15 @@
 import { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Shield, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useAppStore } from '../../store/appStore';
+import { register, login, getServerUrl, connectWs } from '../../api';
 import styles from './SetupFlow.module.css';
 
 export function SetupFlow() {
   const setScreen = useAppStore((s) => s.setScreen);
   const setIdentity = useAppStore((s) => s.setIdentity);
-  const hasExisting = useAppStore((s) => s.hasExistingIdentity);
+  const serverUrl = getServerUrl();
 
-  const [mode, setMode] = useState<'choose' | 'create' | 'login'>(
-    hasExisting ? 'login' : 'choose',
-  );
+  const [mode, setMode] = useState<'choose' | 'create' | 'login'>('choose');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
@@ -23,16 +21,27 @@ export function SetupFlow() {
       setError('Username and password are required');
       return;
     }
+    if (!serverUrl) {
+      setError('No server URL configured');
+      return;
+    }
     setLoading(true);
     setError('');
     try {
-      const phrase = await invoke<string>('create_identity', {
-        username: username.trim(),
-        passphrase: password.trim(),
+      const { token, user } = await register(serverUrl, username.trim(), password.trim());
+      useAppStore.setState({
+        auth: { token, serverUrl, user },
       });
-      await invoke('start_network');
-      useAppStore.setState({ recoveryPhrase: phrase });
-      setScreen('recovery');
+      setIdentity({
+        masterPeerId: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        bio: user.bio ?? '',
+        status: user.status ?? '',
+        isSetUp: true,
+      });
+      connectWs(token);
+      setScreen('onboarding');
     } catch (e) {
       setError(String(e));
     } finally {
@@ -41,52 +50,30 @@ export function SetupFlow() {
   };
 
   const handleLogin = async () => {
-    if (!password.trim()) {
-      setError('Password is required');
+    if (!username.trim() || !password.trim()) {
+      setError('Username and password are required');
+      return;
+    }
+    if (!serverUrl) {
+      setError('No server URL configured');
       return;
     }
     setLoading(true);
     setError('');
     try {
-      const info = await invoke<{
-        masterPeerId: string;
-        deviceName: string;
-        username: string | null;
-        displayName: string;
-      }>('load_identity', { passphrase: password.trim() });
+      const { token, user } = await login(serverUrl, username.trim(), password.trim());
+      useAppStore.setState({
+        auth: { token, serverUrl, user },
+      });
       setIdentity({
-        masterPeerId: info.masterPeerId,
-        username: info.username,
-        displayName: info.displayName,
-        bio: '',
-        status: '',
+        masterPeerId: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        bio: user.bio ?? '',
+        status: user.status ?? '',
         isSetUp: true,
       });
-      await invoke('start_network');
-      setScreen('chat');
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDevLogin = async () => {
-    setLoading(true);
-    try {
-      const info = await invoke<{
-        masterPeerId: string;
-        displayName: string;
-      }>('dev_login');
-      setIdentity({
-        masterPeerId: info.masterPeerId,
-        username: null,
-        displayName: info.displayName,
-        bio: '',
-        status: '',
-        isSetUp: true,
-      });
-      await invoke('start_network');
+      connectWs(token);
       setScreen('chat');
     } catch (e) {
       setError(String(e));
@@ -109,7 +96,7 @@ export function SetupFlow() {
           <Shield size={48} />
         </div>
         <h1 className={styles.title}>Veil</h1>
-        <p className={styles.subtitle}>Encrypted, decentralized messaging</p>
+        <p className={styles.subtitle}>Connected to {serverUrl}</p>
 
         {mode === 'choose' && (
           <div className={styles.choices}>
@@ -119,9 +106,13 @@ export function SetupFlow() {
             <button className={styles.secondaryButton} onClick={() => setMode('login')}>
               Sign In
             </button>
-            <button className={styles.ghostButton} onClick={handleDevLogin} disabled={loading}>
-              {loading ? <Loader2 size={16} className={styles.spinner} /> : null}
-              Dev Login (no persistence)
+            <button
+              className={styles.ghostButton}
+              onClick={() => {
+                useAppStore.getState().setScreen('server-connect');
+              }}
+            >
+              Change Server
             </button>
           </div>
         )}
@@ -174,7 +165,17 @@ export function SetupFlow() {
 
         {mode === 'login' && (
           <div className={styles.form} onKeyDown={handleKeyDown}>
-            <p className={styles.loginHint}>Welcome back. Enter your password to unlock.</p>
+            <p className={styles.loginHint}>Welcome back. Sign in to your account.</p>
+
+            <label className={styles.label}>Username</label>
+            <input
+              className={styles.input}
+              type="text"
+              placeholder="Your username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoFocus
+            />
 
             <label className={styles.label}>Password</label>
             <div className={styles.inputGroup}>
@@ -184,7 +185,6 @@ export function SetupFlow() {
                 placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                autoFocus
               />
               <button
                 className={styles.inputToggle}
@@ -203,18 +203,11 @@ export function SetupFlow() {
               disabled={loading}
             >
               {loading ? <Loader2 size={16} className={styles.spinner} /> : null}
-              Unlock
+              Sign In
             </button>
-            {hasExisting && (
-              <button className={styles.ghostButton} onClick={() => { setMode('choose'); setError(''); }}>
-                Use a different account
-              </button>
-            )}
-            {!hasExisting && (
-              <button className={styles.ghostButton} onClick={() => { setMode('choose'); setError(''); }}>
-                Back
-              </button>
-            )}
+            <button className={styles.ghostButton} onClick={() => { setMode('choose'); setError(''); }}>
+              Back
+            </button>
           </div>
         )}
       </div>

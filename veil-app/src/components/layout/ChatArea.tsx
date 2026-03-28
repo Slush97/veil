@@ -7,13 +7,13 @@ import {
 import clsx from 'clsx';
 import { format, isToday, isYesterday } from 'date-fns';
 import { open } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
 import { readImage } from '@tauri-apps/plugin-clipboard-manager';
 import { Avatar } from '../common';
 import { EmojiGifPicker } from '../chat/EmojiGifPicker';
 // @ts-ignore
 import emojiData from '@emoji-mart/data';
 import { useAppStore } from '../../store/appStore';
+import { getFileUrl, getThumbnailUrl, uploadFile } from '../../api';
 import type { ChatMessage, MessageKind } from '../../types';
 import styles from './ChatArea.module.css';
 
@@ -32,8 +32,6 @@ export function ChatArea() {
   const messages = useAppStore((s) => s.messages);
   const members = useAppStore((s) => s.members);
   const storeSendMessage = useAppStore((s) => s.sendMessage);
-  const sendFile = useAppStore((s) => s.sendFile);
-  const sendFileBytes = useAppStore((s) => s.sendFileBytes);
   const toggleMemberList = useAppStore((s) => s.toggleMemberList);
   const memberListOpen = useAppStore((s) => s.ui.memberListOpen);
   const togglePins = useAppStore((s) => s.togglePins);
@@ -49,7 +47,7 @@ export function ChatArea() {
   const [emojiSuggestions, setEmojiSuggestions] = useState<{ id: string; native: string }[]>([]);
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
   const [attachment, setAttachment] = useState<{
-    bytes: number[];
+    file: File;
     filename: string;
     previewUrl: string | null;
     sending: boolean;
@@ -66,7 +64,7 @@ export function ChatArea() {
     if (attachment && !attachment.sending) {
       setAttachment({ ...attachment, sending: true });
       try {
-        await sendFileBytes(attachment.bytes, attachment.filename);
+        await uploadFile(activeChannelId ?? '', attachment.file, attachment.filename);
       } catch (err) {
         console.error('Failed to send attachment:', err);
       }
@@ -97,7 +95,6 @@ export function ChatArea() {
   };
 
   const insertEmojiSuggestion = (emoji: { id: string; native: string }) => {
-    // Replace the :shortcode with the emoji character
     const match = input.match(/:([a-zA-Z0-9_+-]{2,})$/);
     if (match) {
       setInput(input.slice(0, -match[0].length) + emoji.native);
@@ -107,7 +104,6 @@ export function ChatArea() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Handle emoji suggestion navigation
     if (emojiSuggestions.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -143,7 +139,6 @@ export function ChatArea() {
     el.style.height = 'auto';
     el.style.height = el.scrollHeight + 'px';
 
-    // Check for :shortcode pattern
     const match = value.match(/:([a-zA-Z0-9_+-]{2,})$/);
     if (match) {
       const query = match[1].toLowerCase();
@@ -157,18 +152,15 @@ export function ChatArea() {
     }
   };
 
-  // Stage an attachment for preview before sending
-  const stageAttachment = useCallback((bytes: number[], filename: string, previewUrl: string | null) => {
-    setAttachment({ bytes, filename, previewUrl, sending: false });
+  const stageAttachment = useCallback((file: File, filename: string, previewUrl: string | null) => {
+    setAttachment({ file, filename, previewUrl, sending: false });
   }, []);
 
   // Handle clipboard paste for images/files
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-    // Check if there's text being pasted — let text through normally
     const hasText = e.clipboardData?.getData('text/plain');
     if (hasText) return;
 
-    // Check for file items in clipboardData (works on some platforms)
     const items = e.clipboardData?.items;
     if (items) {
       for (const item of items) {
@@ -178,10 +170,8 @@ export function ChatArea() {
           if (!file) continue;
           const ext = file.type.split('/')[1] || 'png';
           const filename = `paste-${Date.now()}.${ext}`;
-          const arrayBuf = await file.arrayBuffer();
-          const bytes = Array.from(new Uint8Array(arrayBuf));
           const preview = URL.createObjectURL(file);
-          stageAttachment(bytes, filename, preview);
+          stageAttachment(file, filename, preview);
           return;
         }
       }
@@ -214,15 +204,14 @@ export function ChatArea() {
 
       const filename = `paste-${Date.now()}.png`;
       const preview = URL.createObjectURL(blob);
-      const arrayBuf = await blob.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(arrayBuf));
-      stageAttachment(bytes, filename, preview);
+      const file = new File([blob], filename, { type: 'image/png' });
+      stageAttachment(file, filename, preview);
     } catch {
       // No image in clipboard
     }
   }, [stageAttachment]);
 
-  // Open native file picker — stages the file for preview
+  // Open native file picker
   const handleAttach = async () => {
     try {
       const selected = await open({
@@ -243,8 +232,16 @@ export function ChatArea() {
       });
 
       if (selected) {
-        // For file picker, send directly via path (more efficient — no byte copying)
-        await sendFile(selected);
+        // File upload via API (Phase 4 stub — will throw for now)
+        try {
+          const response = await fetch(selected);
+          const blob = await response.blob();
+          const filename = selected.split('/').pop() ?? 'file';
+          const file = new File([blob], filename);
+          await uploadFile(activeChannelId ?? '', file, filename);
+        } catch (err) {
+          console.error('File upload not yet implemented:', err);
+        }
       }
     } catch (err) {
       console.error('File picker failed:', err);
@@ -291,9 +288,9 @@ export function ChatArea() {
               </div>
               <div className={styles.emptyTitle}>Welcome to #{activeChannel?.name ?? 'general'}</div>
               <div className={styles.emptySubtitle}>
-                This is the beginning of your encrypted conversation.
+                This is the beginning of your conversation.
                 <br />
-                Messages are end-to-end encrypted — only group members can read them.
+                Start chatting with your server members!
               </div>
               <button className={styles.emptyAction}>
                 <UserPlus size={16} />
@@ -400,7 +397,6 @@ export function ChatArea() {
                   textareaRef.current?.focus();
                 }}
                 onGifSelect={(url) => {
-                  // Send GIF URL as a text message
                   storeSendMessage(url);
                   setShowPicker(false);
                 }}
@@ -486,7 +482,6 @@ function MessageRow({
 
   return (
     <div className={clsx(styles.messageRow, isGroupStart && styles.groupStart)}>
-      {/* Avatar or timestamp gutter */}
       {isGroupStart ? (
         <div className={styles.messageAvatar}>
           <Avatar name={message.senderName} size="lg" />
@@ -497,9 +492,7 @@ function MessageRow({
         </div>
       )}
 
-      {/* Message body */}
       <div className={styles.messageBody}>
-        {/* Reply context */}
         {message.replyTo && (
           <div className={styles.replyContext}>
             <span className={styles.replyBar} />
@@ -508,7 +501,6 @@ function MessageRow({
           </div>
         )}
 
-        {/* Sender + timestamp (first in group) */}
         {isGroupStart && (
           <div className={styles.messageMeta}>
             <span className={clsx(styles.senderName, roleClass)}>{message.senderName}</span>
@@ -517,10 +509,8 @@ function MessageRow({
           </div>
         )}
 
-        {/* Content */}
         <MediaContent kind={message.kind} edited={message.edited} />
 
-        {/* Reactions */}
         {message.reactions.length > 0 && (
           <div className={styles.reactions}>
             {message.reactions.map((r) => (
@@ -535,7 +525,6 @@ function MessageRow({
         )}
       </div>
 
-      {/* Hover action toolbar */}
       <div className={styles.messageActions}>
         <button className={styles.actionButton} title="Add Reaction">
           <Smile size={16} />
@@ -558,7 +547,6 @@ const GIF_URL_RE = /^https:\/\/(media\.tenor\.com|media[0-9]*\.giphy\.com|i\.gip
 function MediaContent({ kind, edited }: { kind: MessageKind; edited: boolean }) {
   switch (kind.type) {
     case 'text': {
-      // Detect GIF URLs and render inline
       const text = kind.content.trim();
       if (GIF_URL_RE.test(text)) {
         return (
@@ -576,16 +564,16 @@ function MediaContent({ kind, edited }: { kind: MessageKind; edited: boolean }) 
     }
 
     case 'image':
-      return <ImageMessage blobId={kind.blobId} width={kind.width} height={kind.height} thumbnailUrl={kind.thumbnailUrl} />;
+      return <ImageMessage fileId={kind.blobId} width={kind.width} height={kind.height} thumbnailUrl={kind.thumbnailUrl} />;
 
     case 'video':
-      return <VideoMessage blobId={kind.blobId} durationSecs={kind.durationSecs} thumbnailUrl={kind.thumbnailUrl} />;
+      return <VideoMessage fileId={kind.blobId} durationSecs={kind.durationSecs} thumbnailUrl={kind.thumbnailUrl} />;
 
     case 'audio':
-      return <AudioMessage blobId={kind.blobId} durationSecs={kind.durationSecs} waveform={kind.waveform} />;
+      return <AudioMessage fileId={kind.blobId} durationSecs={kind.durationSecs} waveform={kind.waveform} />;
 
     case 'file':
-      return <FileMessage blobId={kind.blobId} filename={kind.filename} sizeBytes={kind.sizeBytes} />;
+      return <FileMessage fileId={kind.blobId} filename={kind.filename} sizeBytes={kind.sizeBytes} />;
 
     case 'gif':
       return (
@@ -599,27 +587,15 @@ function MediaContent({ kind, edited }: { kind: MessageKind; edited: boolean }) 
   }
 }
 
-// ── Image message ──
+// ── Image message — now uses direct URL ──
 
-function ImageMessage({ blobId, width, height, thumbnailUrl }: {
-  blobId: string; width: number; height: number; thumbnailUrl?: string;
+function ImageMessage({ fileId, width, height, thumbnailUrl }: {
+  fileId: string; width: number; height: number; thumbnailUrl?: string;
 }) {
-  const [fullUrl, setFullUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const fullUrl = getFileUrl(fileId);
+  const thumbUrl = thumbnailUrl ?? getThumbnailUrl(fileId);
 
-  const loadFull = async () => {
-    if (fullUrl || loading) return;
-    setLoading(true);
-    try {
-      const b64 = await invoke<string>('get_blob', { blobId });
-      setFullUrl(`data:image/png;base64,${b64}`);
-    } catch (e) {
-      console.error('Failed to load image:', e);
-    }
-    setLoading(false);
-  };
-
-  // Constrain display size
   const maxW = 400;
   const maxH = 300;
   const scale = Math.min(1, maxW / (width || maxW), maxH / (height || maxH));
@@ -627,40 +603,33 @@ function ImageMessage({ blobId, width, height, thumbnailUrl }: {
   const displayH = Math.round((height || maxH) * scale);
 
   return (
-    <div className={styles.mediaImage} onClick={loadFull} style={{ width: displayW, height: displayH }}>
-      {fullUrl ? (
-        <img src={fullUrl} alt="" className={styles.mediaImg} />
-      ) : thumbnailUrl ? (
-        <img src={thumbnailUrl} alt="" className={styles.mediaImg} style={{ filter: 'blur(2px)' }} />
-      ) : (
-        <div className={styles.mediaPlaceholder}>
-          <ImageIcon size={32} />
-          {loading && <span>Loading...</span>}
-        </div>
-      )}
+    <div className={styles.mediaImage} style={{ width: displayW, height: displayH }}>
+      <img
+        src={loaded ? fullUrl : thumbUrl}
+        alt=""
+        className={styles.mediaImg}
+        style={!loaded ? { filter: 'blur(2px)' } : undefined}
+        onLoad={() => {
+          if (!loaded) {
+            // Preload full image
+            const img = new Image();
+            img.onload = () => setLoaded(true);
+            img.src = fullUrl;
+          }
+        }}
+        onError={() => setLoaded(true)} // fallback to full url on thumb error
+      />
     </div>
   );
 }
 
-// ── Video message ──
+// ── Video message — now uses direct URL ──
 
-function VideoMessage({ blobId, durationSecs, thumbnailUrl }: {
-  blobId: string; durationSecs: number; thumbnailUrl?: string;
+function VideoMessage({ fileId, durationSecs, thumbnailUrl }: {
+  fileId: string; durationSecs: number; thumbnailUrl?: string;
 }) {
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const loadVideo = async () => {
-    if (videoUrl || loading) return;
-    setLoading(true);
-    try {
-      const b64 = await invoke<string>('get_blob', { blobId });
-      setVideoUrl(`data:video/mp4;base64,${b64}`);
-    } catch (e) {
-      console.error('Failed to load video:', e);
-    }
-    setLoading(false);
-  };
+  const [playing, setPlaying] = useState(false);
+  const videoUrl = getFileUrl(fileId);
 
   const formatDuration = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -668,16 +637,16 @@ function VideoMessage({ blobId, durationSecs, thumbnailUrl }: {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  if (videoUrl) {
+  if (playing) {
     return (
       <div className={styles.mediaVideo}>
-        <video src={videoUrl} controls className={styles.mediaVideoEl} />
+        <video src={videoUrl} controls autoPlay className={styles.mediaVideoEl} />
       </div>
     );
   }
 
   return (
-    <div className={styles.mediaVideo} onClick={loadVideo}>
+    <div className={styles.mediaVideo} onClick={() => setPlaying(true)}>
       {thumbnailUrl ? (
         <div className={styles.mediaVideoThumb}>
           <img src={thumbnailUrl} alt="" className={styles.mediaImg} />
@@ -686,38 +655,23 @@ function VideoMessage({ blobId, durationSecs, thumbnailUrl }: {
       ) : (
         <div className={styles.mediaPlaceholder} style={{ width: 320, height: 180 }}>
           <Play size={32} />
-          <span>{loading ? 'Loading...' : formatDuration(durationSecs)}</span>
+          <span>{formatDuration(durationSecs)}</span>
         </div>
       )}
     </div>
   );
 }
 
-// ── Audio message ──
+// ── Audio message — now uses direct URL ──
 
-function AudioMessage({ blobId, durationSecs, waveform }: {
-  blobId: string; durationSecs: number; waveform: number[];
+function AudioMessage({ fileId, durationSecs, waveform }: {
+  fileId: string; durationSecs: number; waveform: number[];
 }) {
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
+  const audioUrl = getFileUrl(fileId);
 
-  const loadAndPlay = async () => {
-    if (!audioUrl) {
-      setLoading(true);
-      try {
-        const b64 = await invoke<string>('get_blob', { blobId });
-        const url = `data:audio/mpeg;base64,${b64}`;
-        setAudioUrl(url);
-        // Play after state update
-        setTimeout(() => audioRef.current?.play(), 100);
-      } catch (e) {
-        console.error('Failed to load audio:', e);
-      }
-      setLoading(false);
-      return;
-    }
+  const togglePlay = () => {
     if (playing) {
       audioRef.current?.pause();
     } else {
@@ -733,8 +687,8 @@ function AudioMessage({ blobId, durationSecs, waveform }: {
 
   return (
     <div className={styles.mediaAudio}>
-      <button className={styles.audioPlayBtn} onClick={loadAndPlay}>
-        {loading ? '...' : playing ? '||' : <Play size={16} />}
+      <button className={styles.audioPlayBtn} onClick={togglePlay}>
+        {playing ? '||' : <Play size={16} />}
       </button>
       <div className={styles.audioWaveform}>
         {waveform.map((v, i) => (
@@ -746,25 +700,23 @@ function AudioMessage({ blobId, durationSecs, waveform }: {
         ))}
       </div>
       <span className={styles.audioDuration}>{formatDuration(durationSecs)}</span>
-      {audioUrl && (
-        <audio
-          ref={audioRef}
-          src={audioUrl}
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onEnded={() => setPlaying(false)}
-        />
-      )}
+      <audio
+        ref={audioRef}
+        src={audioUrl}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+      />
     </div>
   );
 }
 
-// ── File message ──
+// ── File message — now uses direct URL ──
 
-function FileMessage({ blobId, filename, sizeBytes }: {
-  blobId: string; filename: string; sizeBytes: number;
+function FileMessage({ fileId, filename, sizeBytes }: {
+  fileId: string; filename: string; sizeBytes: number;
 }) {
-  const [downloading, setDownloading] = useState(false);
+  const fileUrl = getFileUrl(fileId);
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -772,38 +724,17 @@ function FileMessage({ blobId, filename, sizeBytes }: {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const handleDownload = async () => {
-    setDownloading(true);
-    try {
-      const b64 = await invoke<string>('get_blob', { blobId });
-      // Create a download link from base64
-      const binary = atob(b64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const blob = new Blob([bytes]);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      console.error('Failed to download file:', e);
-    }
-    setDownloading(false);
-  };
-
   return (
-    <div className={styles.mediaFile} onClick={handleDownload}>
+    <a href={fileUrl} download={filename} className={styles.mediaFile} style={{ textDecoration: 'none', color: 'inherit' }}>
       <div className={styles.fileIcon}><FileText size={32} /></div>
       <div className={styles.fileInfo}>
         <span className={styles.fileName}>{filename}</span>
         <span className={styles.fileSize}>{formatSize(sizeBytes)}</span>
       </div>
       <button className={styles.fileDownload}>
-        {downloading ? '...' : <Download size={18} />}
+        <Download size={18} />
       </button>
-    </div>
+    </a>
   );
 }
 

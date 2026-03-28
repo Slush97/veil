@@ -1,29 +1,55 @@
 import { useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from './store/appStore';
 import { MainLayout } from './components/layout';
-import { SetupFlow, RecoveryPhrase, LoadingScreen, Onboarding } from './components/setup';
-import { useTauriEvents } from './hooks/useTauriEvents';
+import { SetupFlow, LoadingScreen, Onboarding } from './components/setup';
+import { ServerConnect } from './components/setup/ServerConnect';
+import { useWebSocketEvents } from './hooks/useWebSocketEvents';
+import { getServerUrl, getToken, getMe, connectWs } from './api';
 
 function App() {
   const screen = useAppStore((s) => s.ui.screen);
   const theme = useAppStore((s) => s.ui.theme);
   const setScreen = useAppStore((s) => s.setScreen);
 
-  // Subscribe to Tauri backend events
-  useTauriEvents();
+  // Subscribe to WebSocket events
+  useWebSocketEvents();
 
-  // Boot sequence: check if identity exists
+  // Boot sequence: check localStorage for serverUrl+token -> validate with getMe() -> chat or login
   useEffect(() => {
     if (screen !== 'loading') return;
 
-    invoke<boolean>('has_identity')
-      .then((exists) => {
-        useAppStore.setState({ hasExistingIdentity: exists });
-        setScreen('setup');
+    const serverUrl = getServerUrl();
+    const token = getToken();
+
+    if (!serverUrl) {
+      setScreen('server-connect');
+      return;
+    }
+
+    if (!token) {
+      setScreen('setup');
+      return;
+    }
+
+    // Validate token
+    getMe()
+      .then((user) => {
+        useAppStore.setState({
+          auth: { token, serverUrl, user },
+          identity: {
+            masterPeerId: user.id,
+            username: user.username,
+            displayName: user.display_name,
+            bio: user.bio ?? '',
+            status: user.status ?? '',
+            isSetUp: true,
+          },
+        });
+        connectWs(token);
+        setScreen('chat');
       })
       .catch(() => {
-        // Tauri not available (browser dev mode) — go to setup
+        // Token invalid or expired
         setScreen('setup');
       });
   }, [screen, setScreen]);
@@ -38,8 +64,8 @@ function App() {
   return (
     <div data-theme={theme}>
       {screen === 'loading' && <LoadingScreen />}
+      {screen === 'server-connect' && <ServerConnect />}
       {screen === 'setup' && <SetupFlow />}
-      {screen === 'recovery' && <RecoveryPhrase />}
       {screen === 'onboarding' && <Onboarding />}
       {screen === 'chat' && <MainLayout />}
     </div>

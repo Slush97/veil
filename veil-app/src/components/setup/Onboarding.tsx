@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Shield, Plus, LogIn, Copy, Check, Loader2, ArrowLeft } from 'lucide-react';
 import { useAppStore } from '../../store/appStore';
+import * as api from '../../api';
 import styles from './SetupFlow.module.css';
 import onbStyles from './Onboarding.module.css';
 
@@ -16,10 +16,7 @@ export function Onboarding() {
   // Result from creating a server
   const [createResult, setCreateResult] = useState<{
     inviteCode: string;
-    relayAddr: string;
-    groupName: string;
-    tailscale: string | null;
-    lan: string[];
+    serverName: string;
   } | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -31,40 +28,35 @@ export function Onboarding() {
     setLoading(true);
     setError('');
     try {
-      const result = await invoke<{
-        groupId: string;
-        groupName: string;
-        inviteCode: string;
-        relayAddr: string;
-        addresses: {
-          tailscale: string | null;
-          lan: string[];
-          relayPort: number;
-          best: string;
-        };
-      }>('create_server', { name: serverName.trim() });
+      const server = await api.createServer(serverName.trim());
 
-      // Add the new group to the store immediately
+      // Add the new group to the store
       const state = useAppStore.getState();
       const newGroup = {
-        id: result.groupId,
-        name: result.groupName,
+        id: server.id,
+        name: server.name,
         description: '',
         unreadCount: 0,
       };
       useAppStore.setState({
         groups: [...state.groups, newGroup],
-        activeGroupId: result.groupId,
-        relayHosting: { active: true, addr: result.relayAddr, voiceEnabled: true },
+        activeGroupId: server.id,
       });
 
-      setCreateResult({
-        inviteCode: result.inviteCode,
-        relayAddr: result.relayAddr,
-        groupName: result.groupName,
-        tailscale: result.addresses.tailscale,
-        lan: result.addresses.lan,
-      });
+      // Create an invite for sharing
+      try {
+        const invite = await api.createInvite(server.id);
+        setCreateResult({
+          inviteCode: invite.code,
+          serverName: server.name,
+        });
+      } catch {
+        // Invite creation failed, still show success
+        setCreateResult({
+          inviteCode: '',
+          serverName: server.name,
+        });
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -80,7 +72,7 @@ export function Onboarding() {
     setLoading(true);
     setError('');
     try {
-      await invoke('join_via_invite', { code: inviteCode.trim() });
+      await api.acceptInvite(inviteCode.trim());
       await useAppStore.getState().hydrateFromBackend();
       setScreen('chat');
     } catch (e) {
@@ -108,7 +100,7 @@ export function Onboarding() {
           <Shield size={48} />
         </div>
 
-        {/* ── Choose mode ── */}
+        {/* Choose mode */}
         {mode === 'choose' && (
           <>
             <h1 className={styles.title}>Get Started</h1>
@@ -119,7 +111,7 @@ export function Onboarding() {
                 <div className={onbStyles.optionIcon}><Plus size={24} /></div>
                 <div className={onbStyles.optionText}>
                   <strong>Create a Server</strong>
-                  <span>Host your own encrypted server. Share an invite code with friends.</span>
+                  <span>Start a new server. Share an invite code with friends.</span>
                 </div>
               </button>
 
@@ -138,12 +130,12 @@ export function Onboarding() {
           </>
         )}
 
-        {/* ── Create server ── */}
+        {/* Create server */}
         {mode === 'create' && !createResult && (
           <>
             <h1 className={styles.title}>Create Your Server</h1>
             <p className={styles.subtitle}>
-              This starts an encrypted relay on your machine. Your friends connect directly to you.
+              Give your server a name. You can invite friends after it's created.
             </p>
 
             <div className={styles.form}>
@@ -172,41 +164,28 @@ export function Onboarding() {
           </>
         )}
 
-        {/* ── Server created — show invite code ── */}
+        {/* Server created — show invite code */}
         {mode === 'create' && createResult && (
           <>
-            <h1 className={styles.title}>{createResult.groupName}</h1>
+            <h1 className={styles.title}>{createResult.serverName}</h1>
             <p className={styles.subtitle}>
-              Your server is running! Share this invite code with friends.
+              Your server is ready! Share this invite code with friends.
             </p>
 
-            <div className={onbStyles.inviteSection}>
-              <label className={styles.label}>Invite Code</label>
-              <div className={onbStyles.codeBox}>
-                <code className={onbStyles.code}>{createResult.inviteCode}</code>
-                <button
-                  className={onbStyles.copyBtn}
-                  onClick={() => handleCopy(createResult.inviteCode)}
-                >
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                </button>
+            {createResult.inviteCode && (
+              <div className={onbStyles.inviteSection}>
+                <label className={styles.label}>Invite Code</label>
+                <div className={onbStyles.codeBox}>
+                  <code className={onbStyles.code}>{createResult.inviteCode}</code>
+                  <button
+                    className={onbStyles.copyBtn}
+                    onClick={() => handleCopy(createResult.inviteCode)}
+                  >
+                    {copied ? <Check size={16} /> : <Copy size={16} />}
+                  </button>
+                </div>
               </div>
-
-              <div className={onbStyles.addressInfo}>
-                {createResult.tailscale && (
-                  <div className={onbStyles.addressRow}>
-                    <span className={onbStyles.addrLabel}>Tailscale</span>
-                    <span className={onbStyles.addrValue}>{createResult.tailscale}</span>
-                  </div>
-                )}
-                {createResult.lan.length > 0 && (
-                  <div className={onbStyles.addressRow}>
-                    <span className={onbStyles.addrLabel}>LAN</span>
-                    <span className={onbStyles.addrValue}>{createResult.lan[0]}</span>
-                  </div>
-                )}
-              </div>
-            </div>
+            )}
 
             <button className={styles.primaryButton} onClick={handleContinue}>
               Continue to Server
@@ -214,7 +193,7 @@ export function Onboarding() {
           </>
         )}
 
-        {/* ── Join server ── */}
+        {/* Join server */}
         {mode === 'join' && (
           <>
             <h1 className={styles.title}>Join a Server</h1>

@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Hash, Volume2, Settings, Plus, Trash2, Copy, Check } from 'lucide-react';
 import clsx from 'clsx';
-import { invoke } from '@tauri-apps/api/core';
 import { Avatar, StatusDot } from '../common';
 import { VoiceControls } from '../voice/VoiceControls';
 import { CreateChannelModal } from '../modals';
 import { useAppStore } from '../../store/appStore';
+import { createInvite } from '../../api';
 import type { Channel } from '../../types';
 import styles from './ChannelSidebar.module.css';
 
 interface ChannelContextMenu {
   x: number;
   y: number;
+  channelId: string;
   channelName: string;
 }
 
@@ -34,7 +35,6 @@ export function ChannelSidebar() {
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
 
-  // Close context menu on click outside
   useEffect(() => {
     const handler = () => setContextMenu(null);
     if (contextMenu) {
@@ -57,6 +57,10 @@ export function ChannelSidebar() {
       .filter((ch) => ch.categoryId === catId)
       .sort((a, b) => a.position - b.position);
 
+  const uncategorizedChannels = channels
+    .filter((ch) => ch.categoryId === null)
+    .sort((a, b) => a.position - b.position);
+
   const channelIcon = (kind: Channel['kind']) => {
     switch (kind) {
       case 'voice': return <Volume2 size={16} />;
@@ -64,18 +68,60 @@ export function ChannelSidebar() {
     }
   };
 
-  const handleChannelContextMenu = (e: React.MouseEvent, channelName: string) => {
+  const handleChannelContextMenu = (e: React.MouseEvent, ch: Channel) => {
     e.preventDefault();
-    if (channelName === 'general') return; // Can't delete general
-    setContextMenu({ x: e.clientX, y: e.clientY, channelName });
+    if (ch.name === 'general') return;
+    setContextMenu({ x: e.clientX, y: e.clientY, channelId: ch.id, channelName: ch.name });
   };
 
   const handleDeleteChannel = async () => {
     if (!contextMenu) return;
     try {
-      await deleteChannel(contextMenu.channelName);
+      await deleteChannel(contextMenu.channelId);
     } catch { /* logged in store */ }
     setContextMenu(null);
+  };
+
+  const renderChannel = (ch: Channel) => {
+    const isVoice = ch.kind === 'voice';
+    const isInThisVoice = isVoice && voice.inRoom && voice.channelName === ch.name;
+
+    return (
+      <div key={ch.id}>
+        <div
+          className={clsx(
+            styles.channel,
+            !isVoice && activeChannelId === ch.id && styles.active,
+            isInThisVoice && styles.active,
+            ch.unread && styles.unread,
+          )}
+          onClick={() => {
+            if (isVoice) {
+              if (!voice.inRoom) joinVoiceChannel(ch.name);
+            } else {
+              switchChannel(ch.id);
+            }
+          }}
+          onContextMenu={(e) => handleChannelContextMenu(e, ch)}
+        >
+          <span className={styles.channelIcon}>{channelIcon(ch.kind)}</span>
+          <span className={styles.channelName}>{ch.name}</span>
+        </div>
+        {isInThisVoice && voice.participants.length > 0 && (
+          <div className={styles.voiceParticipants}>
+            {voice.participants.map((p) => (
+              <div
+                key={p.peerId}
+                className={clsx(styles.voiceUser, p.isSpeaking && styles.speaking)}
+              >
+                <Volume2 size={12} />
+                <span>{p.displayName.substring(0, 12)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -85,12 +131,12 @@ export function ChannelSidebar() {
         className={styles.header}
         onClick={async () => {
           setShowServerInfo(!showServerInfo);
-          if (!showServerInfo && !inviteCode) {
+          if (!showServerInfo && !inviteCode && activeGroupId) {
             try {
-              const result = await invoke<{ code: string }>('create_invite_code');
-              setInviteCode(result.code);
+              const invite = await createInvite(activeGroupId);
+              setInviteCode(invite.code);
             } catch {
-              // No relay — invite code not available yet
+              // Invite creation not available
             }
           }
         }}
@@ -130,7 +176,7 @@ export function ChannelSidebar() {
             </>
           ) : (
             <div className={styles.infoHint}>
-              Start hosting a relay in Settings to generate an invite code
+              Click to generate an invite code
             </div>
           )}
         </div>
@@ -138,13 +184,13 @@ export function ChannelSidebar() {
 
       {/* Channel list */}
       <div className={styles.channelList}>
+        {/* Categorized channels */}
         {categories.sort((a, b) => a.position - b.position).map((cat) => {
           const isCollapsed = collapsedCats.has(cat.id);
           const catChannels = channelsByCategory(cat.id);
 
           return (
             <div key={cat.id}>
-              {/* Category header */}
               <div className={styles.category}>
                 <div className={styles.categoryToggle} onClick={() => toggleCategory(cat.id)}>
                   <ChevronRight
@@ -163,55 +209,32 @@ export function ChannelSidebar() {
                 </button>
               </div>
 
-              {/* Channels */}
-              {!isCollapsed && catChannels.map((ch) => {
-                const isVoice = ch.kind === 'voice';
-                const isInThisVoice = isVoice && voice.inRoom && voice.channelName === ch.name;
-
-                return (
-                  <div key={ch.id}>
-                    <div
-                      className={clsx(
-                        styles.channel,
-                        !isVoice && activeChannelId === ch.id && styles.active,
-                        isInThisVoice && styles.active,
-                        ch.unread && styles.unread,
-                      )}
-                      onClick={() => {
-                        if (isVoice) {
-                          if (!voice.inRoom) joinVoiceChannel(ch.name);
-                        } else {
-                          switchChannel(ch.name);
-                        }
-                      }}
-                      onContextMenu={(e) => handleChannelContextMenu(e, ch.name)}
-                    >
-                      <span className={styles.channelIcon}>{channelIcon(ch.kind)}</span>
-                      <span className={styles.channelName}>{ch.name}</span>
-                    </div>
-                    {/* Show participants under the active voice channel */}
-                    {isInThisVoice && voice.participants.length > 0 && (
-                      <div className={styles.voiceParticipants}>
-                        {voice.participants.map((p) => (
-                          <div
-                            key={p.peerId}
-                            className={clsx(styles.voiceUser, p.isSpeaking && styles.speaking)}
-                          >
-                            <Volume2 size={12} />
-                            <span>{p.displayName.substring(0, 12)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {!isCollapsed && catChannels.map(renderChannel)}
             </div>
           );
         })}
+
+        {/* Uncategorized channels */}
+        {uncategorizedChannels.length > 0 && categories.length === 0 && (
+          <div>
+            <div className={styles.category}>
+              <div className={styles.categoryToggle}>
+                <span className={styles.categoryName}>Channels</span>
+              </div>
+              <button
+                className={styles.addChannelBtn}
+                title="Create Channel"
+                onClick={() => setShowCreateChannel(true)}
+              >
+                <Plus size={14} />
+              </button>
+            </div>
+            {uncategorizedChannels.map(renderChannel)}
+          </div>
+        )}
       </div>
 
-      {/* Voice controls (above user panel when in a call) */}
+      {/* Voice controls */}
       <VoiceControls />
 
       {/* User panel */}
@@ -241,8 +264,8 @@ function UserPanel() {
   const connection = useAppStore((s) => s.connection);
   const toggleSettings = useAppStore((s) => s.toggleSettings);
   const displayName = identity.displayName || identity.username || 'You';
-  const statusText = connection.state === 'connected' ? 'Online' : 'Connecting...';
-  const statusDot = connection.state === 'connected' ? 'online' as const : 'idle' as const;
+  const statusText = connection.wsState === 'connected' ? 'Online' : 'Connecting...';
+  const statusDot = connection.wsState === 'connected' ? 'online' as const : 'idle' as const;
 
   return (
     <div className={styles.userPanel}>

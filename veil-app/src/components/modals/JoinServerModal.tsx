@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../store/appStore';
+import { acceptInvite } from '../../api';
 import styles from './Modal.module.css';
 
 interface Props {
@@ -18,23 +18,19 @@ export function JoinServerModal({ onClose }: Props) {
     setError(null);
     setJoining(true);
     try {
-      const result = await invoke<{
-        groupId: string;
-        groupName: string;
-        relayAddr: string;
-      }>('join_via_invite', { code: code.trim() });
+      const invite = await acceptInvite(code.trim());
 
       // Add group to store
       const state = useAppStore.getState();
       const newGroup = {
-        id: result.groupId,
-        name: result.groupName,
+        id: invite.server_id,
+        name: invite.server_name,
         description: '',
         unreadCount: 0,
       };
       useAppStore.setState({
         groups: [...state.groups, newGroup],
-        activeGroupId: result.groupId,
+        activeGroupId: invite.server_id,
       });
 
       // Hydrate messages for the new group
@@ -59,7 +55,7 @@ export function JoinServerModal({ onClose }: Props) {
 
         <div className={styles.body}>
           <p className={styles.warningText}>
-            Paste an invite code from a friend to join their encrypted server.
+            Paste an invite code from a friend to join their server.
           </p>
           <div className={styles.field}>
             <label className={styles.label}>Invite Code</label>

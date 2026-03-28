@@ -1,13 +1,24 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
-import type { Screen, ConnectionState } from '../types/identity';
+import type { Screen } from '../types/identity';
 import type { Group, Channel, Category, Member } from '../types/groups';
 import type { ChatMessage } from '../types/messages';
 import type { VoiceParticipant, VoiceState } from '../types/voice';
+import type { User } from '../api/auth';
 import { webRTCManager } from '../voice/WebRTCManager';
+import { serverMessageToChat } from './messageMapping';
+import * as api from '../api';
+
+type WsState = 'disconnected' | 'connecting' | 'connected';
 
 interface AppState {
-  // Identity
+  // Auth
+  auth: {
+    token: string | null;
+    serverUrl: string | null;
+    user: User | null;
+  };
+
+  // Identity (derived from auth.user for UI compat)
   identity: {
     masterPeerId: string | null;
     username: string | null;
@@ -17,13 +28,7 @@ interface AppState {
     isSetUp: boolean;
   };
 
-  // Recovery phrase (transient, cleared after confirmation)
-  recoveryPhrase: string | null;
-
-  // Boot state
-  hasExistingIdentity: boolean;
-
-  // Groups
+  // Groups (servers)
   groups: Group[];
   activeGroupId: string | null;
 
@@ -40,20 +45,11 @@ interface AppState {
 
   // Connection
   connection: {
-    state: ConnectionState;
-    relayConnected: boolean;
-    peerCount: number;
+    wsState: WsState;
   };
 
   // Voice
   voice: VoiceState;
-
-  // Relay hosting
-  relayHosting: {
-    active: boolean;
-    addr: string | null;
-    voiceEnabled: boolean;
-  };
 
   // UI
   ui: {
@@ -90,9 +86,6 @@ interface AppState {
   setVoiceParticipants: (participants: VoiceParticipant[]) => void;
   updateSpeaking: (peerId: string, speaking: boolean) => void;
 
-  // Relay hosting actions
-  startHostedRelay: (port: number, voiceEnabled: boolean) => Promise<void>;
-  stopHostedRelay: () => Promise<void>;
   toggleSettings: () => void;
 
   // Group/channel management
@@ -100,105 +93,24 @@ interface AppState {
   deleteGroup: (groupId: string) => Promise<void>;
   renameGroup: (groupId: string, newName: string) => Promise<void>;
   createChannel: (name: string, kind: string) => Promise<void>;
-  deleteChannel: (name: string) => Promise<void>;
-
-  // File/media actions
-  sendFile: (filePath: string) => Promise<void>;
-  sendFileBytes: (data: number[], filename: string) => Promise<void>;
+  deleteChannel: (channelId: string) => Promise<void>;
 
   // Async actions
   hydrateFromBackend: () => Promise<void>;
   sendMessage: (text: string, replyToId?: string) => Promise<void>;
   switchGroup: (groupId: string) => Promise<void>;
-  switchChannel: (channelName: string) => Promise<void>;
-}
-
-// ── Backend message mapping ──
-
-interface BackendMessageInfo {
-  id: string;
-  senderId: string;
-  senderName: string;
-  content: string;
-  timestamp: number;
-  isSelf: boolean;
-  channelId: string | null;
-  replyToSender: string | null;
-  replyToPreview: string | null;
-  kindType?: string;
-  blobId?: string;
-  width?: number;
-  height?: number;
-  thumbnailB64?: string;
-  filename?: string;
-  sizeBytes?: number;
-  durationSecs?: number;
-  waveform?: number[];
-}
-
-function backendToChat(m: BackendMessageInfo): ChatMessage {
-  let kind: ChatMessage['kind'];
-
-  switch (m.kindType) {
-    case 'image':
-      kind = {
-        type: 'image',
-        blobId: m.blobId!,
-        width: m.width ?? 0,
-        height: m.height ?? 0,
-        thumbnailUrl: m.thumbnailB64 ? `data:image/jpeg;base64,${m.thumbnailB64}` : undefined,
-      };
-      break;
-    case 'video':
-      kind = {
-        type: 'video',
-        blobId: m.blobId!,
-        durationSecs: m.durationSecs ?? 0,
-        thumbnailUrl: m.thumbnailB64 ? `data:image/jpeg;base64,${m.thumbnailB64}` : undefined,
-      };
-      break;
-    case 'audio':
-      kind = {
-        type: 'audio',
-        blobId: m.blobId!,
-        durationSecs: m.durationSecs ?? 0,
-        waveform: m.waveform ?? [],
-      };
-      break;
-    case 'file':
-      kind = {
-        type: 'file',
-        blobId: m.blobId!,
-        filename: m.filename ?? 'file',
-        sizeBytes: m.sizeBytes ?? 0,
-      };
-      break;
-    default:
-      kind = { type: 'text', content: m.content };
-  }
-
-  return {
-    id: m.id,
-    senderId: m.senderId,
-    senderName: m.senderName,
-    senderRole: m.isSelf ? 'owner' : 'member',
-    kind,
-    timestamp: m.timestamp * 1000,
-    edited: false,
-    pinned: false,
-    ephemeral: false,
-    expiresAt: null,
-    replyTo: m.replyToSender
-      ? { id: '', senderName: m.replyToSender, preview: m.replyToPreview ?? '' }
-      : null,
-    reactions: [],
-    isSelf: m.isSelf,
-  };
+  switchChannel: (channelId: string) => Promise<void>;
 }
 
 // ── Store ──
 
 export const useAppStore = create<AppState>((set, get) => ({
+  auth: {
+    token: api.getToken(),
+    serverUrl: api.getServerUrl(),
+    user: null,
+  },
+
   identity: {
     masterPeerId: null,
     username: null,
@@ -208,26 +120,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     isSetUp: false,
   },
 
-  recoveryPhrase: null,
-  hasExistingIdentity: false,
-
   groups: [],
   activeGroupId: null,
 
   channels: [],
-  categories: [
-    { id: 'cat-text', name: 'Text Channels', position: 0, collapsed: false },
-    { id: 'cat-voice', name: 'Voice Channels', position: 1, collapsed: false },
-  ],
+  categories: [],
   activeChannelId: null,
 
   members: [],
   messages: [],
 
   connection: {
-    state: 'disconnected',
-    relayConnected: false,
-    peerCount: 0,
+    wsState: 'disconnected',
   },
 
   voice: {
@@ -237,12 +141,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     isMuted: false,
     isDeafened: false,
     participants: [],
-  },
-
-  relayHosting: {
-    active: false,
-    addr: null,
-    voiceEnabled: false,
   },
 
   ui: {
@@ -267,42 +165,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   togglePins: () => set((s) => ({ ui: { ...s.ui, showPins: !s.ui.showPins } })),
   setReplyingTo: (msg) => set((s) => ({ ui: { ...s.ui, replyingTo: msg } })),
   setEditingMessage: (msg) => set((s) => ({ ui: { ...s.ui, editingMessage: msg } })),
-  addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
+  addMessage: (msg) =>
+    set((s) => {
+      if (s.messages.some((m) => m.id === msg.id)) return s;
+      return { messages: [...s.messages, msg] };
+    }),
   setTheme: (theme) => set((s) => ({ ui: { ...s.ui, theme } })),
-
-  // ── Relay hosting + settings ──
-
-  startHostedRelay: async (port, voiceEnabled) => {
-    try {
-      const status = await invoke<{ hosting: boolean; addr: string | null; voiceEnabled: boolean }>(
-        'start_hosted_relay',
-        { port, voiceEnabled },
-      );
-      set({
-        relayHosting: {
-          active: status.hosting,
-          addr: status.addr,
-          voiceEnabled: status.voiceEnabled,
-        },
-      });
-      // Auto-connect to the local relay
-      if (status.addr) {
-        await invoke('connect_relay', { addr: status.addr });
-      }
-    } catch (e) {
-      console.error('Failed to start hosted relay:', e);
-      throw e;
-    }
-  },
-
-  stopHostedRelay: async () => {
-    try {
-      await invoke('stop_hosted_relay');
-      set({ relayHosting: { active: false, addr: null, voiceEnabled: false } });
-    } catch (e) {
-      console.error('Failed to stop hosted relay:', e);
-    }
-  },
 
   toggleSettings: () =>
     set((s) => ({ ui: { ...s.ui, settingsOpen: !s.ui.settingsOpen } })),
@@ -311,11 +179,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   joinVoiceChannel: async (channelName) => {
     try {
-      await invoke('voice_join', { channelName });
+      api.wsSend('voice_join', { channel_name: channelName });
       set({
         voice: {
           inRoom: true,
-          roomId: null, // Will be set when we receive the offer
+          roomId: null,
           channelName,
           isMuted: false,
           isDeafened: false,
@@ -330,7 +198,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   leaveVoiceChannel: async () => {
     try {
       webRTCManager.disconnect();
-      await invoke('voice_leave');
+      api.wsSend('voice_leave', {});
       set({
         voice: {
           inRoom: false,
@@ -349,35 +217,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleMute: async () => {
     const { voice } = get();
     const newMuted = !voice.isMuted;
-    try {
-      await invoke('voice_set_mute', { muted: newMuted });
-      webRTCManager.setMuted(newMuted);
-      set({ voice: { ...voice, isMuted: newMuted } });
-    } catch (e) {
-      console.error('Failed to toggle mute:', e);
-    }
+    webRTCManager.setMuted(newMuted);
+    set({ voice: { ...voice, isMuted: newMuted } });
   },
 
   toggleDeafen: async () => {
     const { voice } = get();
     const newDeafened = !voice.isDeafened;
-    try {
-      await invoke('voice_set_deafen', { deafened: newDeafened });
-      if (newDeafened) {
-        webRTCManager.setMuted(true);
-      } else {
-        webRTCManager.setMuted(voice.isMuted);
-      }
-      set({
-        voice: {
-          ...voice,
-          isDeafened: newDeafened,
-          isMuted: newDeafened ? true : voice.isMuted,
-        },
-      });
-    } catch (e) {
-      console.error('Failed to toggle deafen:', e);
+    if (newDeafened) {
+      webRTCManager.setMuted(true);
+    } else {
+      webRTCManager.setMuted(voice.isMuted);
     }
+    set({
+      voice: {
+        ...voice,
+        isDeafened: newDeafened,
+        isMuted: newDeafened ? true : voice.isMuted,
+      },
+    });
   },
 
   setVoiceParticipants: (participants) => {
@@ -399,14 +257,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   createGroup: async (name) => {
     try {
-      const result = await invoke<{ id: string; name: string; memberCount: number; unreadCount: number }>(
-        'create_group',
-        { name },
-      );
-      const newGroup: Group = { id: result.id, name: result.name, description: '', unreadCount: 0 };
+      const server = await api.createServer(name);
+      const newGroup: Group = {
+        id: server.id,
+        name: server.name,
+        description: '',
+        unreadCount: 0,
+      };
       set((s) => ({ groups: [...s.groups, newGroup] }));
-      // Switch to the new group
-      await get().switchGroup(result.id);
+      await get().switchGroup(server.id);
     } catch (e) {
       console.error('Failed to create group:', e);
       throw e;
@@ -415,14 +274,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   deleteGroup: async (groupId) => {
     try {
-      await invoke('delete_group', { groupId });
+      await api.deleteServer(groupId);
       const groups = get().groups.filter((g) => g.id !== groupId);
       const newActiveId = groups.length > 0 ? groups[0].id : null;
       set({ groups, activeGroupId: newActiveId });
       if (newActiveId) {
         await get().switchGroup(newActiveId);
       } else {
-        set({ channels: [], messages: [] });
+        set({ channels: [], categories: [], messages: [], members: [] });
       }
     } catch (e) {
       console.error('Failed to delete group:', e);
@@ -432,7 +291,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   renameGroup: async (groupId, newName) => {
     try {
-      await invoke('rename_group', { groupId, newName });
+      await api.updateServer(groupId, newName);
       set((s) => ({
         groups: s.groups.map((g) => (g.id === groupId ? { ...g, name: newName } : g)),
       }));
@@ -443,19 +302,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   createChannel: async (name, kind) => {
+    const { activeGroupId } = get();
+    if (!activeGroupId) return;
     try {
-      await invoke('create_channel', { name, kind });
-      const channelName = name.toLowerCase().replace(/ /g, '-');
-      const categoryId = kind === 'voice' ? 'cat-voice' : 'cat-text';
+      const ch = await api.createChannel(activeGroupId, name, kind as 'text' | 'voice');
       set((s) => ({
         channels: [
           ...s.channels,
           {
-            id: `ch-${channelName}`,
-            name: channelName,
-            kind: kind as Channel['kind'],
-            categoryId,
-            position: s.channels.filter((c) => c.categoryId === categoryId).length,
+            id: ch.id,
+            name: ch.name,
+            kind: ch.kind as Channel['kind'],
+            categoryId: ch.category_id,
+            position: ch.position,
             unread: false,
           },
         ],
@@ -466,14 +325,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  deleteChannel: async (name) => {
+  deleteChannel: async (channelId) => {
     try {
-      await invoke('delete_channel', { name });
+      await api.deleteChannel(channelId);
       set((s) => {
-        const channels = s.channels.filter((c) => c.name !== name);
-        const newActive = s.activeChannelId === `ch-${name}` && channels.length > 0
-          ? channels[0].id
-          : s.activeChannelId;
+        const channels = s.channels.filter((c) => c.id !== channelId);
+        const newActive =
+          s.activeChannelId === channelId && channels.length > 0
+            ? channels[0].id
+            : s.activeChannelId;
         return { channels, activeChannelId: newActive };
       });
     } catch (e) {
@@ -482,98 +342,95 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  // ── File / media actions ──
-
-  sendFile: async (filePath) => {
-    try {
-      const result = await invoke<BackendMessageInfo>('send_file', { filePath });
-      const msg = backendToChat(result);
-      set((s) => ({ messages: [...s.messages, msg] }));
-    } catch (e) {
-      console.error('Failed to send file:', e);
-      throw e;
-    }
-  },
-
-  sendFileBytes: async (data, filename) => {
-    try {
-      const result = await invoke<BackendMessageInfo>('send_file_bytes', { data, filename });
-      const msg = backendToChat(result);
-      set((s) => ({ messages: [...s.messages, msg] }));
-    } catch (e) {
-      console.error('Failed to send file bytes:', e);
-      throw e;
-    }
-  },
-
-  // ── Async actions that call Tauri backend ──
+  // ── Async actions that call REST API ──
 
   hydrateFromBackend: async () => {
     try {
-      // Load groups
-      const groups = await invoke<Array<{ id: string; name: string; memberCount: number; unreadCount: number }>>('get_groups');
-      const mappedGroups: Group[] = groups.map((g) => ({
-        id: g.id,
-        name: g.name,
+      const userId = get().auth.user?.id ?? '';
+
+      // Load servers
+      const servers = await api.listServers();
+      const mappedGroups: Group[] = servers.map((s) => ({
+        id: s.id,
+        name: s.name,
         description: '',
-        unreadCount: g.unreadCount,
+        unreadCount: 0,
       }));
 
-      // Auto-select first group
       const activeGroupId = mappedGroups.length > 0 ? mappedGroups[0].id : null;
+
+      let mappedChannels: Channel[] = [];
+      let mappedCategories: Category[] = [];
+      let activeChannelId: string | null = null;
+      let mappedMessages: ChatMessage[] = [];
+      let mappedMembers: Member[] = [];
+
       if (activeGroupId) {
-        await invoke('set_active_group', { index: 0 });
+        // Load channels
+        const channelResp = await api.listChannels(activeGroupId);
+
+        mappedCategories = channelResp.categories.map((cat) => ({
+          id: cat.id,
+          name: cat.name,
+          position: cat.position,
+          collapsed: false,
+        }));
+
+        for (const cat of channelResp.categories) {
+          for (const ch of cat.channels) {
+            mappedChannels.push({
+              id: ch.id,
+              name: ch.name,
+              kind: ch.kind as Channel['kind'],
+              categoryId: cat.id,
+              position: ch.position,
+              unread: false,
+            });
+          }
+        }
+        for (const ch of channelResp.uncategorized) {
+          mappedChannels.push({
+            id: ch.id,
+            name: ch.name,
+            kind: ch.kind as Channel['kind'],
+            categoryId: null,
+            position: ch.position,
+            unread: false,
+          });
+        }
+
+        // Pick first text channel
+        const firstText = mappedChannels.find((c) => c.kind === 'text');
+        activeChannelId = firstText?.id ?? (mappedChannels[0]?.id ?? null);
+
+        // Load messages for the active channel
+        if (activeChannelId) {
+          const msgs = await api.listMessages(activeChannelId, { limit: 50 });
+          mappedMessages = msgs.map((m) => serverMessageToChat(m, userId));
+        }
+
+        // Load members
+        const members = await api.listMembers(activeGroupId);
+        mappedMembers = members.map((m) => ({
+          peerId: m.user_id,
+          displayName: m.display_name || m.username,
+          role: m.role as Member['role'],
+          status: 'online' as const,
+          bio: '',
+          statusText: '',
+          isTyping: false,
+          isSelf: m.user_id === userId,
+        }));
       }
-
-      // Load channels
-      const channels = await invoke<Array<{ name: string; isActive: boolean }>>('get_channels');
-      const mappedChannels: Channel[] = channels.map((c, i) => ({
-        id: `ch-${c.name}`,
-        name: c.name,
-        kind: 'text' as const,
-        categoryId: 'cat-text',
-        position: i,
-        unread: false,
-      }));
-      // Add default voice channels
-      mappedChannels.push({
-        id: 'ch-voice-general',
-        name: 'General',
-        kind: 'voice',
-        categoryId: 'cat-voice',
-        position: 0,
-        unread: false,
-      });
-      const activeChannelId = mappedChannels.length > 0 ? mappedChannels[0].id : null;
-
-      if (channels.length > 0) {
-        await invoke('set_active_channel', { name: channels[0].name });
-      }
-
-      // Load messages
-      const msgs = await invoke<BackendMessageInfo[]>('get_messages', { limit: 200 });
-      const mappedMessages: ChatMessage[] = msgs.map(backendToChat);
-
-      // Load connection info
-      const conn = await invoke<{
-        state: string;
-        relayConnected: boolean;
-        peerCount: number;
-        localAddr: string | null;
-      }>('get_connection_info');
 
       set({
         groups: mappedGroups,
         activeGroupId,
         channels: mappedChannels,
+        categories: mappedCategories,
         activeChannelId,
         messages: mappedMessages,
-        members: [], // will be populated by peer events
-        connection: {
-          state: (conn.state as ConnectionState) || 'disconnected',
-          relayConnected: conn.relayConnected,
-          peerCount: conn.peerCount,
-        },
+        members: mappedMembers,
       });
     } catch (e) {
       console.error('Failed to hydrate from backend:', e);
@@ -581,65 +438,108 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   sendMessage: async (text, replyToId) => {
+    const { activeChannelId, auth } = get();
+    if (!activeChannelId) return;
     try {
-      const result = await invoke<BackendMessageInfo>(
-        'send_message',
-        { text, replyToId: replyToId ?? null },
-      );
-      const msg = backendToChat(result);
+      const result = await api.sendMessage(activeChannelId, text, replyToId);
+      const msg = serverMessageToChat(result, auth.user?.id ?? '');
 
-      set((s) => ({
-        messages: [...s.messages, msg],
-        ui: { ...s.ui, replyingTo: null },
-      }));
+      set((s) => {
+        // Dedup
+        if (s.messages.some((m) => m.id === msg.id)) return { ui: { ...s.ui, replyingTo: null } };
+        return {
+          messages: [...s.messages, msg],
+          ui: { ...s.ui, replyingTo: null },
+        };
+      });
     } catch (e) {
       console.error('Failed to send message:', e);
     }
   },
 
   switchGroup: async (groupId) => {
-    const groups = get().groups;
-    const index = groups.findIndex((g) => g.id === groupId);
-    if (index === -1) return;
-
+    const { auth } = get();
+    const userId = auth.user?.id ?? '';
     try {
-      await invoke('set_active_group', { index });
-      set({ activeGroupId: groupId, messages: [] });
+      set({ activeGroupId: groupId, messages: [], channels: [], categories: [] });
 
-      // Reload channels and messages for the new group
-      const channels = await invoke<Array<{ name: string; isActive: boolean }>>('get_channels');
-      const mappedChannels: Channel[] = channels.map((c, i) => ({
-        id: `ch-${c.name}`,
-        name: c.name,
-        kind: 'text' as const,
-        categoryId: 'cat-text',
-        position: i,
-        unread: false,
+      // Load channels
+      const channelResp = await api.listChannels(groupId);
+
+      const mappedCategories: Category[] = channelResp.categories.map((cat) => ({
+        id: cat.id,
+        name: cat.name,
+        position: cat.position,
+        collapsed: false,
       }));
 
-      if (channels.length > 0) {
-        await invoke('set_active_channel', { name: channels[0].name });
+      const mappedChannels: Channel[] = [];
+      for (const cat of channelResp.categories) {
+        for (const ch of cat.channels) {
+          mappedChannels.push({
+            id: ch.id,
+            name: ch.name,
+            kind: ch.kind as Channel['kind'],
+            categoryId: cat.id,
+            position: ch.position,
+            unread: false,
+          });
+        }
+      }
+      for (const ch of channelResp.uncategorized) {
+        mappedChannels.push({
+          id: ch.id,
+          name: ch.name,
+          kind: ch.kind as Channel['kind'],
+          categoryId: null,
+          position: ch.position,
+          unread: false,
+        });
       }
 
-      const msgs = await invoke<BackendMessageInfo[]>('get_messages', { limit: 200 });
-      const mappedMessages: ChatMessage[] = msgs.map(backendToChat);
+      const firstText = mappedChannels.find((c) => c.kind === 'text');
+      const activeChannelId = firstText?.id ?? (mappedChannels[0]?.id ?? null);
+
+      let mappedMessages: ChatMessage[] = [];
+      if (activeChannelId) {
+        const msgs = await api.listMessages(activeChannelId, { limit: 50 });
+        mappedMessages = msgs.map((m) => serverMessageToChat(m, userId));
+      }
+
+      // Load members
+      const members = await api.listMembers(groupId);
+      const mappedMembers: Member[] = members.map((m) => ({
+        peerId: m.user_id,
+        displayName: m.display_name || m.username,
+        role: m.role as Member['role'],
+        status: 'online' as const,
+        bio: '',
+        statusText: '',
+        isTyping: false,
+        isSelf: m.user_id === userId,
+      }));
 
       set({
         channels: mappedChannels,
-        activeChannelId: mappedChannels.length > 0 ? mappedChannels[0].id : null,
+        categories: mappedCategories,
+        activeChannelId,
         messages: mappedMessages,
+        members: mappedMembers,
       });
     } catch (e) {
       console.error('Failed to switch group:', e);
     }
   },
 
-  switchChannel: async (channelName) => {
+  switchChannel: async (channelId) => {
+    const { auth } = get();
+    const userId = auth.user?.id ?? '';
     try {
-      await invoke('set_active_channel', { name: channelName });
-      set({ activeChannelId: `ch-${channelName}` });
-      // Messages are per-group in the current backend, but we track the channel
-      // for future per-channel filtering
+      set({ activeChannelId: channelId, messages: [] });
+
+      const msgs = await api.listMessages(channelId, { limit: 50 });
+      const mappedMessages = msgs.map((m) => serverMessageToChat(m, userId));
+      set({ messages: mappedMessages });
     } catch (e) {
       console.error('Failed to switch channel:', e);
     }
