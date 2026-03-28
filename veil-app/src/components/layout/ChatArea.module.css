@@ -368,6 +368,49 @@
   40% { transform: scale(1); opacity: 1; }
 }
 
+/* Emoji shortcode suggestions */
+.emojiSuggestions {
+  margin: 0 var(--space-lg);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xs);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.emojiSuggestion {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-md);
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-size: var(--text-base);
+  cursor: pointer;
+  text-align: left;
+}
+
+.emojiSuggestionActive {
+  background: var(--accent-dim);
+}
+
+.emojiChar {
+  font-size: 20px;
+  width: 28px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.emojiId {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
 /* Attachment preview */
 .attachmentPreview {
   display: flex;

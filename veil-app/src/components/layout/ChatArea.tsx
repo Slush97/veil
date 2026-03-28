@@ -10,9 +10,21 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { readImage } from '@tauri-apps/plugin-clipboard-manager';
 import { Avatar } from '../common';
+import { EmojiGifPicker } from '../chat/EmojiGifPicker';
+// @ts-ignore
+import emojiData from '@emoji-mart/data';
 import { useAppStore } from '../../store/appStore';
 import type { ChatMessage, MessageKind } from '../../types';
 import styles from './ChatArea.module.css';
+
+// Build shortcode lookup from emoji-mart data
+const emojiEntries: { id: string; native: string; keywords: string[] }[] = [];
+for (const [id, emoji] of Object.entries((emojiData as any).emojis as Record<string, any>)) {
+  const native = emoji.skins?.[0]?.native;
+  if (native) {
+    emojiEntries.push({ id, native, keywords: emoji.keywords || [] });
+  }
+}
 
 export function ChatArea() {
   const channels = useAppStore((s) => s.channels);
@@ -33,6 +45,9 @@ export function ChatArea() {
   const typingMembers = members.filter((m) => m.isTyping && !m.isSelf);
 
   const [input, setInput] = useState('');
+  const [showPicker, setShowPicker] = useState(false);
+  const [emojiSuggestions, setEmojiSuggestions] = useState<{ id: string; native: string }[]>([]);
+  const [selectedSuggestion, setSelectedSuggestion] = useState(0);
   const [attachment, setAttachment] = useState<{
     bytes: number[];
     filename: string;
@@ -81,7 +96,40 @@ export function ChatArea() {
     }
   };
 
+  const insertEmojiSuggestion = (emoji: { id: string; native: string }) => {
+    // Replace the :shortcode with the emoji character
+    const match = input.match(/:([a-zA-Z0-9_+-]{2,})$/);
+    if (match) {
+      setInput(input.slice(0, -match[0].length) + emoji.native);
+    }
+    setEmojiSuggestions([]);
+    textareaRef.current?.focus();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Handle emoji suggestion navigation
+    if (emojiSuggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedSuggestion((s) => Math.min(s + 1, emojiSuggestions.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedSuggestion((s) => Math.max(s - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        insertEmojiSuggestion(emojiSuggestions[selectedSuggestion]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setEmojiSuggestions([]);
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
@@ -89,10 +137,24 @@ export function ChatArea() {
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
+    const value = e.target.value;
+    setInput(value);
     const el = e.target;
     el.style.height = 'auto';
     el.style.height = el.scrollHeight + 'px';
+
+    // Check for :shortcode pattern
+    const match = value.match(/:([a-zA-Z0-9_+-]{2,})$/);
+    if (match) {
+      const query = match[1].toLowerCase();
+      const matches = emojiEntries
+        .filter((e) => e.id.includes(query) || e.keywords.some((k) => k.includes(query)))
+        .slice(0, 8);
+      setEmojiSuggestions(matches);
+      setSelectedSuggestion(0);
+    } else {
+      setEmojiSuggestions([]);
+    }
   };
 
   // Stage an attachment for preview before sending
@@ -271,6 +333,23 @@ export function ChatArea() {
         </div>
       )}
 
+      {/* Emoji shortcode suggestions */}
+      {emojiSuggestions.length > 0 && (
+        <div className={styles.emojiSuggestions}>
+          {emojiSuggestions.map((emoji, i) => (
+            <button
+              key={emoji.id}
+              className={clsx(styles.emojiSuggestion, i === selectedSuggestion && styles.emojiSuggestionActive)}
+              onClick={() => insertEmojiSuggestion(emoji)}
+              onMouseEnter={() => setSelectedSuggestion(i)}
+            >
+              <span className={styles.emojiChar}>{emoji.native}</span>
+              <span className={styles.emojiId}>:{emoji.id}:</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Attachment preview */}
       {attachment && (
         <div className={styles.attachmentPreview}>
@@ -305,9 +384,30 @@ export function ChatArea() {
             onPaste={handlePaste}
             rows={1}
           />
-          <button className={styles.composerButton} title="Emoji">
-            <Smile size={20} />
-          </button>
+          <div style={{ position: 'relative' }}>
+            <button
+              className={styles.composerButton}
+              title="Emoji & GIFs"
+              onClick={() => setShowPicker(!showPicker)}
+              style={showPicker ? { color: 'var(--accent)' } : undefined}
+            >
+              <Smile size={20} />
+            </button>
+            {showPicker && (
+              <EmojiGifPicker
+                onEmojiSelect={(emoji) => {
+                  setInput((prev) => prev + emoji);
+                  textareaRef.current?.focus();
+                }}
+                onGifSelect={(url) => {
+                  // Send GIF URL as a text message
+                  storeSendMessage(url);
+                  setShowPicker(false);
+                }}
+                onClose={() => setShowPicker(false)}
+              />
+            )}
+          </div>
           {(input.trim() || attachment) && (
             <button className={styles.composerButton} onClick={sendMessage} title="Send" style={{ color: 'var(--accent)' }}>
               <Send size={20} />
@@ -453,15 +553,27 @@ function MessageRow({
 
 // ── Media content renderer ──
 
+const GIF_URL_RE = /^https:\/\/(media\.tenor\.com|media[0-9]*\.giphy\.com|i\.giphy\.com)\/.*\.(gif|mp4|webp)(\?.*)?$/;
+
 function MediaContent({ kind, edited }: { kind: MessageKind; edited: boolean }) {
   switch (kind.type) {
-    case 'text':
+    case 'text': {
+      // Detect GIF URLs and render inline
+      const text = kind.content.trim();
+      if (GIF_URL_RE.test(text)) {
+        return (
+          <div className={styles.mediaImage} style={{ width: 'auto', height: 'auto', maxWidth: 320 }}>
+            <img src={text} alt="GIF" className={styles.mediaImg} style={{ width: '100%', height: 'auto' }} />
+          </div>
+        );
+      }
       return (
         <div className={styles.messageText}>
           {kind.content}
           {edited && <span className={styles.editedTag}>(edited)</span>}
         </div>
       );
+    }
 
     case 'image':
       return <ImageMessage blobId={kind.blobId} width={kind.width} height={kind.height} thumbnailUrl={kind.thumbnailUrl} />;
@@ -474,6 +586,13 @@ function MediaContent({ kind, edited }: { kind: MessageKind; edited: boolean }) 
 
     case 'file':
       return <FileMessage blobId={kind.blobId} filename={kind.filename} sizeBytes={kind.sizeBytes} />;
+
+    case 'gif':
+      return (
+        <div className={styles.mediaImage} style={{ width: 'auto', height: 'auto', maxWidth: 320 }}>
+          <img src={kind.url} alt="GIF" className={styles.mediaImg} style={{ width: '100%', height: 'auto' }} />
+        </div>
+      );
 
     default:
       return null;

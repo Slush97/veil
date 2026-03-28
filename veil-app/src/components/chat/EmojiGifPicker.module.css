@@ -1,0 +1,175 @@
+.picker {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: var(--space-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  width: 352px;
+  height: 420px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 100;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 var(--space-xs);
+  flex-shrink: 0;
+}
+
+.tab {
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-muted);
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tab:hover {
+  color: var(--fg-label);
+}
+
+.activeTab {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+.closeBtn {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  color: var(--fg-muted);
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+.closeBtn:hover {
+  color: var(--fg);
+  background: var(--bg-raised);
+}
+
+/* Emoji pane — wrapper around emoji-mart */
+.emojiPane {
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Override emoji-mart sizing and theme */
+.emojiPane :global(em-emoji-picker) {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 370px;
+  --font-family: var(--font-sans);
+  --rgb-background: 20, 23, 27;
+  --rgb-input: 35, 39, 45;
+  --rgb-color: 231, 233, 237;
+  --rgb-accent: 91, 164, 181;
+  --category-icon-size: 18px;
+  --font-size: 14px;
+}
+
+/* Fix category headers overlapping emoji grid */
+.emojiPane :global(.sticky) {
+  background: var(--bg-surface) !important;
+  z-index: 1;
+}
+
+/* GIF pane */
+.gifPane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.gifSearch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.gifInput {
+  flex: 1;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+.gifInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.gifInput::placeholder {
+  color: var(--fg-dim);
+}
+
+.gifGrid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  padding: 0 var(--space-xs) var(--space-xs);
+}
+
+.gifItem {
+  border: none;
+  background: var(--bg-base);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  aspect-ratio: 16/9;
+  transition: opacity var(--transition-fast);
+}
+
+.gifItem:hover {
+  opacity: 0.8;
+}
+
+.gifItem img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.gifLoading,
+.gifEmpty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: var(--space-xl);
+  color: var(--fg-dim);
+  font-size: var(--text-sm);
+}
+
+.tenorBrand {
+  text-align: center;
+  padding: var(--space-xs);
+  font-size: 10px;
+  color: var(--fg-dim);
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}

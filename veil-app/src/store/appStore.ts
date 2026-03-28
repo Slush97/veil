@@ -582,31 +582,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   sendMessage: async (text, replyToId) => {
     try {
-      const result = await invoke<{
-        id: string;
-        senderId: string;
-        senderName: string;
-        content: string;
-        timestamp: number;
-        isSelf: boolean;
-        channelId: string | null;
-      }>('send_message', { text, replyToId: replyToId ?? null });
-
-      const msg: ChatMessage = {
-        id: result.id,
-        senderId: result.senderId,
-        senderName: result.senderName,
-        senderRole: 'owner',
-        kind: { type: 'text', content: result.content },
-        timestamp: result.timestamp * 1000,
-        edited: false,
-        pinned: false,
-        ephemeral: false,
-        expiresAt: null,
-        replyTo: null,
-        reactions: [],
-        isSelf: true,
-      };
+      const result = await invoke<BackendMessageInfo>(
+        'send_message',
+        { text, replyToId: replyToId ?? null },
+      );
+      const msg = backendToChat(result);
 
       set((s) => ({
         messages: [...s.messages, msg],

@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { MessageSquare, Plus, Pencil, Trash2 } from 'lucide-react';
+import { MessageSquare, Plus, Pencil, Trash2, LogIn } from 'lucide-react';
 import clsx from 'clsx';
 import { Badge } from '../common';
 import { useAppStore } from '../../store/appStore';
-import { CreateGroupModal, DeleteGroupModal } from '../modals';
+import { CreateGroupModal, DeleteGroupModal, JoinServerModal } from '../modals';
 import styles from './ServerStrip.module.css';
 
 interface ContextMenu {
@@ -20,12 +20,24 @@ export function ServerStrip() {
   const renameGroup = useAppStore((s) => s.renameGroup);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showJoinModal, setShowJoinModal] = useState(false);
+  const [showAddMenu, setShowAddMenu] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close add menu on click outside
+  useEffect(() => {
+    const handler = () => setShowAddMenu(false);
+    if (showAddMenu) {
+      document.addEventListener('click', handler);
+      return () => document.removeEventListener('click', handler);
+    }
+  }, [showAddMenu]);
 
   // Close context menu on click outside
   useEffect(() => {
@@ -113,12 +125,18 @@ export function ServerStrip() {
         <div className={styles.separator} />
 
         {/* Add server */}
-        <div
-          className={styles.addButton}
-          title="Create Server"
-          onClick={() => setShowCreateModal(true)}
-        >
-          <Plus size={22} />
+        <div className={styles.addButtonWrap}>
+          <div
+            ref={addMenuRef}
+            className={styles.addButton}
+            title="Add Server"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAddMenu(!showAddMenu);
+            }}
+          >
+            <Plus size={22} />
+          </div>
         </div>
       </div>
 
@@ -173,7 +191,33 @@ export function ServerStrip() {
       )}
 
       {/* Modals */}
+      {/* Add server menu */}
+      {showAddMenu && addMenuRef.current && (() => {
+        const rect = addMenuRef.current!.getBoundingClientRect();
+        return (
+          <div
+            className={styles.addMenu}
+            style={{ left: rect.right + 8, bottom: window.innerHeight - rect.bottom }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className={styles.menuItem}
+              onClick={() => { setShowCreateModal(true); setShowAddMenu(false); }}
+            >
+              <Plus size={14} /> Create Server
+            </button>
+            <button
+              className={styles.menuItem}
+              onClick={() => { setShowJoinModal(true); setShowAddMenu(false); }}
+            >
+              <LogIn size={14} /> Join Server
+            </button>
+          </div>
+        );
+      })()}
+
       {showCreateModal && <CreateGroupModal onClose={() => setShowCreateModal(false)} />}
+      {showJoinModal && <JoinServerModal onClose={() => setShowJoinModal(false)} />}
       {deleteTarget && (
         <DeleteGroupModal
           groupId={deleteTarget.id}

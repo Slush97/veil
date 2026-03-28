@@ -4,6 +4,7 @@ export type MessageKind =
   | { type: 'video'; blobId: string; durationSecs: number; thumbnailUrl?: string }
   | { type: 'file'; blobId: string; filename: string; sizeBytes: number }
   | { type: 'audio'; blobId: string; durationSecs: number; waveform: number[] }
+  | { type: 'gif'; url: string; previewUrl: string }
   | { type: 'system'; content: string };
 
 export interface Reaction {

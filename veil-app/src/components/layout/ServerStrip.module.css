@@ -137,6 +137,20 @@
   color: #fff;
 }
 
+.addButtonWrap {
+  position: relative;
+}
+
+.addMenu {
+  position: fixed;
+  z-index: 300;
+  background: var(--bg-raised);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  min-width: 160px;
+}
+
 /* Context menu */
 .contextMenu {
   position: fixed;

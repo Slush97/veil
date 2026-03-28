@@ -44,6 +44,20 @@ export function Onboarding() {
         };
       }>('create_server', { name: serverName.trim() });
 
+      // Add the new group to the store immediately
+      const state = useAppStore.getState();
+      const newGroup = {
+        id: result.groupId,
+        name: result.groupName,
+        description: '',
+        unreadCount: 0,
+      };
+      useAppStore.setState({
+        groups: [...state.groups, newGroup],
+        activeGroupId: result.groupId,
+        relayHosting: { active: true, addr: result.relayAddr, voiceEnabled: true },
+      });
+
       setCreateResult({
         inviteCode: result.inviteCode,
         relayAddr: result.relayAddr,
