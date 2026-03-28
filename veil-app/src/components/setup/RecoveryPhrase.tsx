@@ -20,9 +20,9 @@ export function RecoveryPhrase() {
   };
 
   const handleContinue = () => {
-    // Clear the recovery phrase from state and go to chat
+    // Clear the recovery phrase from state and go to onboarding
     useAppStore.setState({ recoveryPhrase: null });
-    setScreen('chat');
+    setScreen('onboarding');
   };
 
   return (

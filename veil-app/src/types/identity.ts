@@ -12,4 +12,4 @@ export type ConnectionState =
   | 'reconnecting'
   | 'failed';
 
-export type Screen = 'loading' | 'setup' | 'recovery' | 'chat' | 'settings';
+export type Screen = 'loading' | 'setup' | 'recovery' | 'onboarding' | 'chat' | 'settings';

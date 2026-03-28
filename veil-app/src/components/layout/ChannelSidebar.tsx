@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Hash, Volume2, Settings, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Hash, Volume2, Settings, Plus, Trash2, Copy, Check } from 'lucide-react';
 import clsx from 'clsx';
+import { invoke } from '@tauri-apps/api/core';
 import { Avatar, StatusDot } from '../common';
 import { VoiceControls } from '../voice/VoiceControls';
 import { CreateChannelModal } from '../modals';
@@ -29,6 +30,9 @@ export function ChannelSidebar() {
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
   const [showCreateChannel, setShowCreateChannel] = useState(false);
   const [contextMenu, setContextMenu] = useState<ChannelContextMenu | null>(null);
+  const [showServerInfo, setShowServerInfo] = useState(false);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   // Close context menu on click outside
   useEffect(() => {
@@ -77,10 +81,60 @@ export function ChannelSidebar() {
   return (
     <div className={styles.sidebar}>
       {/* Server name header */}
-      <div className={styles.header}>
+      <div
+        className={styles.header}
+        onClick={async () => {
+          setShowServerInfo(!showServerInfo);
+          if (!showServerInfo && !inviteCode) {
+            try {
+              const result = await invoke<{ code: string }>('create_invite_code');
+              setInviteCode(result.code);
+            } catch {
+              // No relay — invite code not available yet
+            }
+          }
+        }}
+      >
         <span className={styles.serverName}>{activeGroup?.name ?? 'Veil'}</span>
-        <ChevronDown size={16} style={{ color: 'var(--fg-muted)' }} />
+        <ChevronDown
+          size={16}
+          style={{
+            color: 'var(--fg-muted)',
+            transform: showServerInfo ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.15s ease',
+          }}
+        />
       </div>
+
+      {/* Server info dropdown */}
+      {showServerInfo && (
+        <div className={styles.serverInfoPanel}>
+          {inviteCode ? (
+            <>
+              <div className={styles.infoLabel}>Invite Code</div>
+              <div className={styles.inviteRow}>
+                <code className={styles.inviteCode}>{inviteCode}</code>
+                <button
+                  className={styles.inviteCopy}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(inviteCode);
+                    setInviteCopied(true);
+                    setTimeout(() => setInviteCopied(false), 2000);
+                  }}
+                >
+                  {inviteCopied ? <Check size={14} /> : <Copy size={14} />}
+                </button>
+              </div>
+              <div className={styles.infoHint}>Share this code so friends can join your server</div>
+            </>
+          ) : (
+            <div className={styles.infoHint}>
+              Start hosting a relay in Settings to generate an invite code
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Channel list */}
       <div className={styles.channelList}>

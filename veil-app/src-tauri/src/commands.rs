@@ -1449,3 +1449,444 @@ pub async fn get_hosted_relay_status(
         voice_enabled: hosting, // If hosting, voice was enabled
     })
 }
+
+// ── Invite code & IP detection ──
+
+/// Invite code format: base64url( relay_addr_bytes | group_id[32] | group_key[32] )
+/// relay_addr_bytes: 1-byte len + utf8 string
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InviteCodeInfo {
+    pub code: String,
+    pub relay_addr: String,
+    pub group_name: String,
+}
+
+/// Generate an invite code for the current group.
+#[tauri::command]
+pub async fn create_invite_code(
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<InviteCodeInfo, String> {
+    let state = state.inner().clone();
+    let s = state.read().await;
+
+    let group = s.current_group().ok_or("No active group")?;
+    let relay_addr = s
+        .relay_host_addr
+        .map(|a| a.to_string())
+        .or_else(|| {
+            s.store
+                .as_ref()
+                .and_then(|store| store.get_setting("relay_addr").ok().flatten())
+        })
+        .ok_or("No relay address — start hosting or connect to a relay first")?;
+
+    let ring = group
+        .key_ring
+        .lock()
+        .map_err(|_| "Key ring lock poisoned")?;
+    let (key_bytes, _gen) = ring.current().to_raw_parts();
+
+    // Encode: addr_len(1) + addr + group_id(32) + key(32)
+    let addr_bytes = relay_addr.as_bytes();
+    if addr_bytes.len() > 255 {
+        return Err("Relay address too long".into());
+    }
+
+    let mut payload = Vec::with_capacity(1 + addr_bytes.len() + 32 + 32);
+    payload.push(addr_bytes.len() as u8);
+    payload.extend_from_slice(addr_bytes);
+    payload.extend_from_slice(&group.id.0);
+    payload.extend_from_slice(&key_bytes);
+
+    let code = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload);
+
+    Ok(InviteCodeInfo {
+        code,
+        relay_addr,
+        group_name: group.name.clone(),
+    })
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinResult {
+    pub group_id: String,
+    pub group_name: String,
+    pub relay_addr: String,
+}
+
+/// Join a server via invite code. Decodes the code, creates the group locally,
+/// connects to the relay, and subscribes to the group's routing tag.
+#[tauri::command]
+pub async fn join_via_invite(
+    code: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<JoinResult, String> {
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(code.trim())
+        .map_err(|_| "Invalid invite code")?;
+
+    if payload.is_empty() {
+        return Err("Invalid invite code".into());
+    }
+
+    let addr_len = payload[0] as usize;
+    if payload.len() < 1 + addr_len + 32 + 32 {
+        return Err("Invalid invite code (too short)".into());
+    }
+
+    let relay_addr =
+        String::from_utf8(payload[1..1 + addr_len].to_vec()).map_err(|_| "Invalid relay address")?;
+
+    let mut group_id = [0u8; 32];
+    group_id.copy_from_slice(&payload[1 + addr_len..1 + addr_len + 32]);
+
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(&payload[1 + addr_len + 32..1 + addr_len + 64]);
+
+    let state = state.inner().clone();
+    let mut s = state.write().await;
+
+    // Check if we already have this group
+    if s.groups.iter().any(|g| g.id.0 == group_id) {
+        return Err("You're already in this server".into());
+    }
+
+    let master = s.master.as_ref().ok_or("Not logged in")?;
+    let master_id = master.peer_id().verifying_key.clone();
+
+    // Reconstruct the group key from raw bytes
+    let group_key = GroupKey::from_raw_parts(key_bytes, 0);
+    let keyring = GroupKeyRing::new(group_key, master_id);
+
+    // Use a derived name until we learn the real one from the group
+    let group_name = format!("Server {}", &hex::encode(&group_id[..4]));
+
+    if let Some(ref store) = s.store {
+        store
+            .store_group_v2(&group_id, &group_name, &keyring)
+            .map_err(|e| format!("Failed to save group: {e}"))?;
+        let _ = store.store_setting("relay_addr", &relay_addr);
+    }
+
+    let group_state = crate::state::GroupState {
+        name: group_name.clone(),
+        id: GroupId(group_id),
+        key_ring: std::sync::Arc::new(std::sync::Mutex::new(keyring)),
+        device_certs: Vec::new(),
+        members: Vec::new(),
+    };
+
+    s.groups.push(group_state);
+    let idx = s.groups.len() - 1;
+    s.current_group_idx = Some(idx);
+
+    // Set default channels
+    let group_hex = hex::encode(group_id);
+    let default_channels = vec!["general".into(), "random".into()];
+    s.group_channels
+        .insert(group_hex.clone(), default_channels.clone());
+    s.channels = default_channels;
+    s.current_channel = Some("general".into());
+
+    // Subscribe to routing tag and connect to relay
+    if let Some(ref tx) = s.net_cmd_tx {
+        let tag = routing_tag_for_group(&group_id);
+        let _ = tx.try_send(crate::state::NetCommand::SubscribeTag(tag));
+
+        if let Ok(addr) = relay_addr.parse::<std::net::SocketAddr>() {
+            let _ = tx
+                .send(crate::state::NetCommand::ConnectRelay(addr))
+                .await;
+        }
+    }
+
+    Ok(JoinResult {
+        group_id: hex::encode(group_id),
+        group_name,
+        relay_addr,
+    })
+}
+
+/// Detect available network addresses for sharing with friends.
+/// Returns Tailscale IP (100.x), LAN IPs, and localhost.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAddresses {
+    pub tailscale: Option<String>,
+    pub lan: Vec<String>,
+    pub relay_port: u16,
+    /// Best address to share: tailscale > lan > localhost
+    pub best: String,
+}
+
+#[tauri::command]
+pub async fn detect_addresses(
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<NetworkAddresses, String> {
+    let state = state.inner().clone();
+    let s = state.read().await;
+
+    let relay_port = s
+        .relay_host_addr
+        .map(|a| a.port())
+        .unwrap_or(4433);
+
+    let mut tailscale: Option<String> = None;
+    let mut lan: Vec<String> = Vec::new();
+
+    if let Ok(ifaces) = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|_| Ok(()))
+    {
+        // Use a different approach — iterate network interfaces
+        let _ = ifaces;
+    }
+
+    // Parse IPs from `ip addr` or network interfaces
+    for iface in get_local_ips() {
+        if iface.starts_with("100.") {
+            // Tailscale uses 100.x.y.z CGNAT range
+            tailscale = Some(format!("{iface}:{relay_port}"));
+        } else if !iface.starts_with("127.") && !iface.starts_with("::") {
+            lan.push(format!("{iface}:{relay_port}"));
+        }
+    }
+
+    let best = tailscale
+        .clone()
+        .or_else(|| lan.first().cloned())
+        .unwrap_or_else(|| format!("127.0.0.1:{relay_port}"));
+
+    Ok(NetworkAddresses {
+        tailscale,
+        lan,
+        relay_port,
+        best,
+    })
+}
+
+/// Get local IP addresses by creating a UDP socket (cross-platform).
+fn get_local_ips() -> Vec<String> {
+    let mut ips = Vec::new();
+
+    // Method 1: connect to public DNS to discover default route IP
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(local) = socket.local_addr() {
+                let ip = local.ip().to_string();
+                if !ips.contains(&ip) {
+                    ips.push(ip);
+                }
+            }
+        }
+    }
+
+    // Method 2: parse `ip -4 addr` output on Linux for all interfaces
+    if let Ok(output) = std::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            // Format: "2: eth0    inet 192.168.1.5/24 ..."
+            if let Some(inet_pos) = line.find("inet ") {
+                let after_inet = &line[inet_pos + 5..];
+                if let Some(slash_pos) = after_inet.find('/') {
+                    let ip = &after_inet[..slash_pos];
+                    if ip != "127.0.0.1" && !ips.contains(&ip.to_string()) {
+                        ips.push(ip.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    ips
+}
+
+/// Create a server: auto-starts relay, creates group, returns invite code.
+/// This is the "one click" server creation for onboarding.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateServerResult {
+    pub group_id: String,
+    pub group_name: String,
+    pub invite_code: String,
+    pub relay_addr: String,
+    pub addresses: NetworkAddresses,
+}
+
+#[tauri::command]
+pub async fn create_server(
+    name: String,
+    state: State<'_, Arc<RwLock<AppState>>>,
+) -> Result<CreateServerResult, String> {
+    if name.is_empty() || name.len() > 100 {
+        return Err("Server name must be 1-100 characters".into());
+    }
+
+    let state_arc = state.inner().clone();
+
+    // 1. Start relay if not already running
+    let port: u16 = {
+        let s = state_arc.read().await;
+        if let Some(ref handle) = s.relay_task {
+            if !handle.is_finished() {
+                s.relay_host_addr.map(|a| a.port()).unwrap_or(4433)
+            } else {
+                4433
+            }
+        } else {
+            4433
+        }
+    };
+
+    let need_relay = {
+        let s = state_arc.read().await;
+        s.relay_task
+            .as_ref()
+            .map_or(true, |h| h.is_finished())
+    };
+
+    if need_relay {
+        let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
+        let data_dir = veil_data_dir();
+        std::fs::create_dir_all(&data_dir).ok();
+        let db_path = data_dir.join("relay-mailbox.redb");
+
+        let config = veil_relay::RelayConfig {
+            bind_addr,
+            db_path,
+            voice_config: Some(veil_relay::voice::VoiceConfig {
+                udp_bind_addr: ([0, 0, 0, 0], port + 1).into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let server = veil_relay::RelayServer::new(config);
+        let handle = tokio::spawn(async move {
+            server
+                .run()
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })
+        });
+
+        let mut s = state_arc.write().await;
+        s.relay_task = Some(handle);
+        s.relay_host_addr = Some(bind_addr);
+
+        if let Some(ref store) = s.store {
+            let _ = store.store_setting("relay_host_port", &port.to_string());
+        }
+    }
+
+    // 2. Create the group
+    let (group_id_bytes, group_name, key_bytes) = {
+        let mut s = state_arc.write().await;
+        let master = s.master.as_ref().ok_or("Not logged in")?;
+        let master_id = master.peer_id().verifying_key.clone();
+        let peer_id = master.peer_id();
+
+        let group_key = GroupKey::generate();
+        let (key_raw, _gen) = group_key.to_raw_parts();
+        let group_id_bytes = blake3::derive_key(
+            "veil-group-id",
+            &bincode::serialize(&(&name, &peer_id, chrono::Utc::now().timestamp_nanos_opt()))
+                .unwrap_or_default(),
+        );
+        let keyring = GroupKeyRing::new(group_key, master_id);
+
+        if let Some(ref store) = s.store {
+            store
+                .store_group_v2(&group_id_bytes, &name, &keyring)
+                .map_err(|e| format!("Failed to save group: {e}"))?;
+        }
+
+        let group_state = crate::state::GroupState {
+            name: name.clone(),
+            id: GroupId(group_id_bytes),
+            key_ring: std::sync::Arc::new(std::sync::Mutex::new(keyring)),
+            device_certs: Vec::new(),
+            members: Vec::new(),
+        };
+
+        s.groups.push(group_state);
+        let idx = s.groups.len() - 1;
+        s.current_group_idx = Some(idx);
+
+        let group_hex = hex::encode(group_id_bytes);
+        let default_channels = vec!["general".into(), "random".into()];
+        s.group_channels.insert(group_hex, default_channels.clone());
+        s.channels = default_channels;
+        s.current_channel = Some("general".into());
+
+        (group_id_bytes, name.clone(), key_raw)
+    };
+
+    // 3. Get addresses
+    let addresses = {
+        let s = state_arc.read().await;
+        let relay_port = s.relay_host_addr.map(|a| a.port()).unwrap_or(port);
+        let mut tailscale: Option<String> = None;
+        let mut lan: Vec<String> = Vec::new();
+
+        for ip in get_local_ips() {
+            if ip.starts_with("100.") {
+                tailscale = Some(format!("{ip}:{relay_port}"));
+            } else if !ip.starts_with("127.") {
+                lan.push(format!("{ip}:{relay_port}"));
+            }
+        }
+
+        let best = tailscale
+            .clone()
+            .or_else(|| lan.first().cloned())
+            .unwrap_or_else(|| format!("127.0.0.1:{relay_port}"));
+
+        NetworkAddresses {
+            tailscale,
+            lan,
+            relay_port,
+            best,
+        }
+    };
+
+    // 4. Auto-connect to own relay
+    {
+        let s = state_arc.read().await;
+        if let Some(ref tx) = s.net_cmd_tx {
+            let tag = routing_tag_for_group(&group_id_bytes);
+            let _ = tx.try_send(crate::state::NetCommand::SubscribeTag(tag));
+
+            let local_addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
+            let _ = tx
+                .send(crate::state::NetCommand::ConnectRelay(local_addr))
+                .await;
+        }
+        if let Some(ref store) = s.store {
+            let _ = store.store_setting("relay_addr", &format!("127.0.0.1:{port}"));
+        }
+    }
+
+    // 5. Generate invite code using the best address
+    let relay_addr_for_invite = addresses.best.clone();
+    let addr_bytes = relay_addr_for_invite.as_bytes();
+    let mut payload = Vec::with_capacity(1 + addr_bytes.len() + 32 + 32);
+    payload.push(addr_bytes.len() as u8);
+    payload.extend_from_slice(addr_bytes);
+    payload.extend_from_slice(&group_id_bytes);
+    payload.extend_from_slice(&key_bytes);
+
+    let invite_code = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload);
+
+    Ok(CreateServerResult {
+        group_id: hex::encode(group_id_bytes),
+        group_name,
+        invite_code,
+        relay_addr: relay_addr_for_invite,
+        addresses,
+    })
+}

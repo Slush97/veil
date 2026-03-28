@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from './store/appStore';
 import { MainLayout } from './components/layout';
-import { SetupFlow, RecoveryPhrase, LoadingScreen } from './components/setup';
+import { SetupFlow, RecoveryPhrase, LoadingScreen, Onboarding } from './components/setup';
 import { useTauriEvents } from './hooks/useTauriEvents';
 
 function App() {
@@ -40,6 +40,7 @@ function App() {
       {screen === 'loading' && <LoadingScreen />}
       {screen === 'setup' && <SetupFlow />}
       {screen === 'recovery' && <RecoveryPhrase />}
+      {screen === 'onboarding' && <Onboarding />}
       {screen === 'chat' && <MainLayout />}
     </div>
   );

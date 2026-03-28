@@ -57,6 +57,11 @@ pub fn run() {
             commands::start_hosted_relay,
             commands::stop_hosted_relay,
             commands::get_hosted_relay_status,
+            // Invite & server setup
+            commands::create_invite_code,
+            commands::join_via_invite,
+            commands::detect_addresses,
+            commands::create_server,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
